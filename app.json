@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Cause I Said So",
+    "slug": "cause-i-said-so",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./public/expo-icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./public/expo-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "./public/favicon.ico"
+    }
+  }
+}
