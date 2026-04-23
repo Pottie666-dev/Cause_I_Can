@@ -26,3 +26,5 @@ node_modules
 /playwright/.cache/
 
 app.config.timestamp_*.js
+.env*
+.tanstack-tmp-*
