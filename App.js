@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import {
   ActivityIndicator,
@@ -22,6 +23,12 @@ const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'https://ridgeway-mansion-api.
 function startOfDay(d) {
   const t = new Date(d)
   t.setHours(0, 0, 0, 0)
+  return t
+}
+
+function endOfDayDate(d) {
+  const t = new Date(d)
+  t.setHours(23, 59, 59, 999)
   return t
 }
 
@@ -76,6 +83,37 @@ function meterTypeLabel(value) {
 
 function meterTypeIcon(value) {
   return METER_TYPES.find((type) => type.value === value)?.icon || '⚡'
+}
+
+const HIDDEN_METER_IDS_KEY = 'ridgeway_power_hidden_meter_ids'
+
+async function loadHiddenMeterIds() {
+  try {
+    const raw = await AsyncStorage.getItem(HIDDEN_METER_IDS_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return new Set(Array.isArray(arr) ? arr.map(String) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+async function saveHiddenMeterIds(ids) {
+  await AsyncStorage.setItem(HIDDEN_METER_IDS_KEY, JSON.stringify([...ids]))
+}
+
+/** Local calendar date from YYYY-MM-DD (avoids UTC shift). */
+function parseLocalYyyyMmDd(s) {
+  if (!s || typeof s !== 'string') return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim())
+  if (!m) return null
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return Number.isNaN(dt.getTime()) ? null : dt
+}
+
+function formatPowerDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 const allDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -1087,15 +1125,38 @@ function PawnScreen({ user, onBack }) {
 function PowerScreen({ user, onBack }) {
   const [meters, setMeters] = useState([])
   const [transactions, setTransactions] = useState([])
-  const [meterName, setMeterName] = useState('')
-  const [meterNumber, setMeterNumber] = useState('')
-  const [meterType, setMeterType] = useState('power')
+  const [hiddenMeterIds, setHiddenMeterIds] = useState(() => new Set())
+  const [powerTab, setPowerTab] = useState('record')
   const [selectedMeterId, setSelectedMeterId] = useState('')
   const [amount, setAmount] = useState('')
   const [units, setUnits] = useState('')
-  const [dateInput, setDateInput] = useState('')
+  const [readingInput, setReadingInput] = useState('')
+  const [loadDate, setLoadDate] = useState(() => startOfDay(new Date()))
+  const [randomReading, setRandomReading] = useState('')
+  const [snapshotDate, setSnapshotDate] = useState(() => startOfDay(new Date()))
+  const [statsStartDate, setStatsStartDate] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 30)
+    return startOfDay(d)
+  })
+  const [statsEndDate, setStatsEndDate] = useState(() => startOfDay(new Date()))
+  const [powerPickerTarget, setPowerPickerTarget] = useState(null)
+  const [editDraft, setEditDraft] = useState(null)
+  const [savingLoad, setSavingLoad] = useState(false)
+  const [savingReading, setSavingReading] = useState(false)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const submitLock = useRef(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  const hydrateHidden = useCallback(async () => {
+    const s = await loadHiddenMeterIds()
+    setHiddenMeterIds(s)
+  }, [])
+
+  useEffect(() => {
+    void hydrateHidden()
+  }, [hydrateHidden])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -1104,53 +1165,454 @@ function PowerScreen({ user, onBack }) {
       const [metersData, txData] = await Promise.all([apiFetch('/api/meters'), apiFetch('/api/meter-transactions')])
       setMeters(metersData)
       setTransactions(txData)
-      if (!selectedMeterId && metersData[0]) setSelectedMeterId(metersData[0]._id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed loading utility data')
     } finally {
       setLoading(false)
     }
-  }, [selectedMeterId])
+  }, [])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  const addMeter = async () => {
-    if (!meterName.trim()) return
-    await apiFetch('/api/meters', {
-      method: 'POST',
-      body: JSON.stringify({ userId: user?._id, name: meterName.trim(), meterNumber: meterNumber.trim(), meterType }),
-    })
-    setMeterName('')
-    setMeterNumber('')
-    setMeterType('power')
-    await refresh()
+  const visibleMeters = useMemo(
+    () => meters.filter((m) => !hiddenMeterIds.has(String(m._id))),
+    [meters, hiddenMeterIds],
+  )
+  const powerMeters = useMemo(() => visibleMeters.filter((m) => meterTypeFor(m) === 'power'), [visibleMeters])
+  const waterMeters = useMemo(() => visibleMeters.filter((m) => meterTypeFor(m) === 'water'), [visibleMeters])
+
+  useEffect(() => {
+    if (!selectedMeterId && visibleMeters[0]) setSelectedMeterId(visibleMeters[0]._id)
+    if (selectedMeterId && !visibleMeters.some((m) => m._id === selectedMeterId)) {
+      setSelectedMeterId(visibleMeters[0]?._id || '')
+    }
+  }, [visibleMeters, selectedMeterId])
+
+  const hideMeter = (meter) => {
+    Alert.alert('Hide meter?', `“${meter.name}” will be hidden from lists and stats. You can restore hidden meters below.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Hide',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            const next = new Set(hiddenMeterIds)
+            next.add(String(meter._id))
+            setHiddenMeterIds(next)
+            await saveHiddenMeterIds(next)
+            if (selectedMeterId === meter._id) setSelectedMeterId('')
+          })()
+        },
+      },
+    ])
   }
 
-  const addTransaction = async () => {
-    if (!selectedMeterId) return
-    await apiFetch('/api/meter-transactions', {
-      method: 'POST',
-      body: JSON.stringify({
-        meterId: selectedMeterId,
-        userId: user?._id,
-        amount: Number(amount || 0),
-        units: Number(units || 0),
-        date: dateInput ? new Date(dateInput).getTime() : Date.now(),
-      }),
-    })
-    setAmount('')
-    setUnits('')
-    setDateInput('')
-    await refresh()
+  const restoreMeter = (meterId) => {
+    void (async () => {
+      const next = new Set(hiddenMeterIds)
+      next.delete(String(meterId))
+      setHiddenMeterIds(next)
+      await saveHiddenMeterIds(next)
+    })()
   }
 
-  const meterLookup = Object.fromEntries(meters.map((meter) => [meter._id, meter]))
+  const meterLookup = useMemo(() => Object.fromEntries(meters.map((meter) => [meter._id, meter])), [meters])
+
+  const hiddenMeters = useMemo(
+    () => meters.filter((m) => hiddenMeterIds.has(String(m._id))),
+    [meters, hiddenMeterIds],
+  )
+
+  const visibleTransactions = useMemo(
+    () =>
+      transactions
+        .filter((tx) => !hiddenMeterIds.has(String(tx.meterId)))
+        .sort((a, b) => Number(b.date || 0) - Number(a.date || 0)),
+    [transactions, hiddenMeterIds],
+  )
+
+  const validateLoadFields = () => {
+    if (!selectedMeterId) {
+      setError('Select a meter.')
+      return null
+    }
+    if (!amount.trim() || !units.trim() || !readingInput.trim()) {
+      setError('Amount, units, and current reading are required.')
+      return null
+    }
+    const amt = Number(amount.trim())
+    const unt = Number(units.trim())
+    const r = Number(readingInput.trim())
+    if (!Number.isFinite(amt) || !Number.isFinite(unt) || !Number.isFinite(r)) {
+      setError('Amount, units, and reading must be valid numbers.')
+      return null
+    }
+    return { amt, unt, r }
+  }
+
+  const validateReadingSnapshotFields = () => {
+    if (!selectedMeterId) {
+      setError('Select a meter.')
+      return null
+    }
+    if (!randomReading.trim()) {
+      setError('Reading is required.')
+      return null
+    }
+    const r = Number(randomReading.trim())
+    if (!Number.isFinite(r)) {
+      setError('Reading must be a valid number.')
+      return null
+    }
+    return r
+  }
+
+  const executeSaveLoad = async () => {
+    const vals = validateLoadFields()
+    if (!vals) return
+    if (submitLock.current || savingLoad) return
+    submitLock.current = true
+    setSavingLoad(true)
+    setError('')
+    try {
+      await apiFetch('/api/meter-transactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          meterId: selectedMeterId,
+          userId: user?._id,
+          amount: vals.amt,
+          units: vals.unt,
+          reading: vals.r,
+          entryType: 'load',
+          date: loadDate.getTime(),
+        }),
+      })
+      setAmount('')
+      setUnits('')
+      setReadingInput('')
+      setLoadDate(startOfDay(new Date()))
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save load')
+    } finally {
+      submitLock.current = false
+      setSavingLoad(false)
+    }
+  }
+
+  const promptSaveLoad = () => {
+    const vals = validateLoadFields()
+    if (!vals) return
+    const meterName = meterLookup[selectedMeterId]?.name || 'Meter'
+    Alert.alert(
+      'Save utility load?',
+      `${meterName}\nR ${vals.amt.toFixed(2)} · ${vals.unt.toFixed(2)} units\nReading ${vals.r.toFixed(2)}\n${formatPowerDate(loadDate)}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Save', onPress: () => void executeSaveLoad() },
+      ],
+    )
+  }
+
+  const executeSaveReading = async () => {
+    const r = validateReadingSnapshotFields()
+    if (r == null) return
+    if (submitLock.current || savingReading) return
+    submitLock.current = true
+    setSavingReading(true)
+    setError('')
+    try {
+      await apiFetch('/api/meter-transactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          meterId: selectedMeterId,
+          userId: user?._id,
+          amount: 0,
+          units: 0,
+          reading: r,
+          entryType: 'reading',
+          date: snapshotDate.getTime(),
+        }),
+      })
+      setRandomReading('')
+      setSnapshotDate(startOfDay(new Date()))
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save reading')
+    } finally {
+      submitLock.current = false
+      setSavingReading(false)
+    }
+  }
+
+  const promptSaveReading = () => {
+    const r = validateReadingSnapshotFields()
+    if (r == null) return
+    const meterName = meterLookup[selectedMeterId]?.name || 'Meter'
+    Alert.alert(
+      'Save reading snapshot?',
+      `${meterName}\nReading ${r.toFixed(2)}\n${formatPowerDate(snapshotDate)}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Save', onPress: () => void executeSaveReading() },
+      ],
+    )
+  }
+
+  const openEditTransaction = (transaction) => {
+    setEditDraft({
+      _id: transaction._id,
+      meterId: transaction.meterId,
+      entryType: (transaction.entryType || 'load') === 'reading' ? 'reading' : 'load',
+      amountStr: String(transaction.amount ?? ''),
+      unitsStr: String(transaction.units ?? ''),
+      readingStr:
+        transaction.reading != null && Number.isFinite(Number(transaction.reading)) ? String(transaction.reading) : '',
+      date: startOfDay(new Date(transaction.date || Date.now())),
+    })
+    setError('')
+  }
+
+  const executeSaveEdit = async () => {
+    if (!editDraft) return
+    if (!editDraft.readingStr.trim()) {
+      setError('Reading is required.')
+      return
+    }
+    const rd = Number(editDraft.readingStr.trim())
+    if (!Number.isFinite(rd)) {
+      setError('Reading must be a valid number.')
+      return
+    }
+    let amt = 0
+    let unt = 0
+    if (editDraft.entryType === 'load') {
+      if (!editDraft.amountStr.trim() || !editDraft.unitsStr.trim()) {
+        setError('Amount and units are required for a load.')
+        return
+      }
+      amt = Number(editDraft.amountStr.trim())
+      unt = Number(editDraft.unitsStr.trim())
+      if (!Number.isFinite(amt) || !Number.isFinite(unt)) {
+        setError('Amount and units must be valid numbers.')
+        return
+      }
+    }
+    setSavingEdit(true)
+    setError('')
+    try {
+      await apiFetch(`/api/meter-transactions/${editDraft._id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          userId: user?._id,
+          meterId: editDraft.meterId,
+          entryType: editDraft.entryType,
+          amount: editDraft.entryType === 'reading' ? 0 : amt,
+          units: editDraft.entryType === 'reading' ? 0 : unt,
+          reading: rd,
+          date: editDraft.date.getTime(),
+        }),
+      })
+      setEditDraft(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update transaction')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const promptSaveEdit = () => {
+    if (!editDraft) return
+    Alert.alert('Save changes?', 'Update this transaction on the server.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Save', onPress: () => void executeSaveEdit() },
+    ])
+  }
+
+  const confirmDeleteTransaction = (transaction) => {
+    Alert.alert('Delete transaction?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await apiFetch(`/api/meter-transactions/${transaction._id}`, {
+                method: 'DELETE',
+                body: JSON.stringify({ userId: user?._id }),
+              })
+              setEditDraft(null)
+              await refresh()
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Could not delete')
+            }
+          })()
+        },
+      },
+    ])
+  }
+
+  const onTransactionLongPress = (transaction) => {
+    const m = meterLookup[transaction.meterId]
+    Alert.alert('Transaction', `${m?.name || 'Meter'} · ${new Date(transaction.date || Date.now()).toLocaleDateString()}`, [
+      { text: 'Edit', onPress: () => openEditTransaction(transaction) },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => confirmDeleteTransaction(transaction),
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  const applyPowerPickerDate = (rawDate) => {
+    const sd = startOfDay(rawDate)
+    switch (powerPickerTarget) {
+      case 'loadDate':
+        setLoadDate(sd)
+        break
+      case 'snapshotDate':
+        setSnapshotDate(sd)
+        break
+      case 'statsStart':
+        setStatsStartDate(sd)
+        break
+      case 'statsEnd':
+        setStatsEndDate(sd)
+        break
+      case 'editDate':
+        setEditDraft((prev) => (prev ? { ...prev, date: sd } : null))
+        break
+      default:
+        break
+    }
+  }
+
+  const powerPickerValue = useMemo(() => {
+    switch (powerPickerTarget) {
+      case 'loadDate':
+        return loadDate
+      case 'snapshotDate':
+        return snapshotDate
+      case 'statsStart':
+        return statsStartDate
+      case 'statsEnd':
+        return statsEndDate
+      case 'editDate':
+        return editDraft?.date ?? startOfDay(new Date())
+      default:
+        return startOfDay(new Date())
+    }
+  }, [powerPickerTarget, loadDate, snapshotDate, statsStartDate, statsEndDate, editDraft])
+
+  const statsBundle = useMemo(() => {
+    const startMs = startOfDay(statsStartDate).getTime()
+    const endMs = endOfDayDate(statsEndDate).getTime()
+    if (startMs > endMs) return { error: 'Start date must be on or before end date.' }
+
+    const visibleIds = new Set(visibleMeters.map((m) => String(m._id)))
+    const inRange = (tx) => {
+      const t = Number(tx.date || 0)
+      return t >= startMs && t <= endMs && visibleIds.has(String(tx.meterId))
+    }
+
+    const txsInRange = transactions.filter(inRange)
+    const loads = txsInRange.filter((tx) => (tx.entryType || 'load') !== 'reading')
+    const loadAmount = loads.reduce((s, tx) => s + Number(tx.amount || 0), 0)
+    const loadUnits = loads.reduce((s, tx) => s + Number(tx.units || 0), 0)
+
+    const intervals = []
+    for (const m of visibleMeters) {
+      const chain = transactions
+        .filter((tx) => String(tx.meterId) === String(m._id) && visibleIds.has(String(tx.meterId)))
+        .filter((tx) => tx.reading != null && Number.isFinite(Number(tx.reading)))
+        .sort((a, b) => Number(a.date) - Number(b.date))
+
+      for (let i = 1; i < chain.length; i++) {
+        const prev = chain[i - 1]
+        const curr = chain[i]
+        const d1 = Number(curr.date)
+        if (d1 < startMs || d1 > endMs) continue
+        const delta = Number(curr.reading) - Number(prev.reading)
+        const dayMs = 24 * 60 * 60 * 1000
+        const days = Math.max(1 / 24, (d1 - Number(prev.date)) / dayMs)
+        intervals.push({
+          meterId: m._id,
+          meterName: m.name,
+          kind: meterTypeFor(m),
+          from: Number(prev.date),
+          to: d1,
+          delta,
+          days,
+          avgPerDay: delta / days,
+        })
+      }
+    }
+
+    const sumDelta = intervals.reduce((s, x) => s + x.delta, 0)
+    const sumDays = intervals.reduce((s, x) => s + x.days, 0)
+    const avgDailyFromReading = sumDays > 0 ? sumDelta / sumDays : 0
+    const monthlyProjection = avgDailyFromReading * 30
+
+    return {
+      startMs,
+      endMs,
+      loadAmount,
+      loadUnits,
+      intervals,
+      avgDailyFromReading,
+      monthlyProjection,
+      sumDelta,
+    }
+  }, [transactions, visibleMeters, statsStartDate, statsEndDate])
+
+  const renderMeterColumn = (title, list) => (
+    <View style={powerStyles.meterColumn}>
+      <Text style={powerStyles.meterColumnTitle}>{title}</Text>
+      {list.length === 0 ? <Text style={[styles.empty, powerStyles.empty]}>No meters</Text> : null}
+      {list.map((meter) => (
+        <Pressable
+          key={meter._id}
+          style={[powerStyles.meterColumnChip, selectedMeterId === meter._id ? powerStyles.meterChipActive : null]}
+          onPress={() => setSelectedMeterId(meter._id)}
+          onLongPress={() => hideMeter(meter)}
+          delayLongPress={450}
+        >
+          <Text
+            style={[powerStyles.meterColumnChipText, selectedMeterId === meter._id ? powerStyles.meterChipTextActive : null]}
+            numberOfLines={3}
+          >
+            {meterTypeIcon(meterTypeFor(meter))} {meter.name}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  )
 
   return (
     <SafeAreaView style={[styles.container, powerStyles.screen]}>
       <TopBar title="Power H20" variant="power" onBack={onBack} onRefresh={refresh} />
+      <View style={powerStyles.powerTabBar}>
+        <TouchableOpacity
+          style={[powerStyles.powerTab, powerTab === 'record' && powerStyles.powerTabActive]}
+          onPress={() => setPowerTab('record')}
+        >
+          <Text style={[powerStyles.powerTabText, powerTab === 'record' && powerStyles.powerTabTextActive]}>Record</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[powerStyles.powerTab, powerTab === 'history' && powerStyles.powerTabActive]}
+          onPress={() => setPowerTab('history')}
+        >
+          <Text style={[powerStyles.powerTabText, powerTab === 'history' && powerStyles.powerTabTextActive]}>History</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[powerStyles.powerTab, powerTab === 'stats' && powerStyles.powerTabActive]} onPress={() => setPowerTab('stats')}>
+          <Text style={[powerStyles.powerTabText, powerTab === 'stats' && powerStyles.powerTabTextActive]}>Stats</Text>
+        </TouchableOpacity>
+      </View>
       <KeyboardAvoidingView
         style={styles.keyboardFlex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1161,106 +1623,327 @@ function PowerScreen({ user, onBack }) {
           keyboardDismissMode="on-drag"
           contentContainerStyle={[styles.contentWrap, styles.formScrollBottom]}
         >
-        {isAdmin(user) ? (
-          <View style={[styles.card, powerStyles.card]}>
-            <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Add Meter</Text>
-            <TextInput
-              value={meterName}
-              onChangeText={setMeterName}
-              style={[styles.input, powerStyles.input]}
-              placeholder="Meter name"
-              placeholderTextColor="#64748b"
-            />
-            <TextInput
-              value={meterNumber}
-              onChangeText={setMeterNumber}
-              style={[styles.input, powerStyles.input]}
-              placeholder="Meter number (optional)"
-              placeholderTextColor="#64748b"
-            />
-            <View style={styles.row}>
-              {METER_TYPES.map((type) => (
+          {powerTab === 'record' ? (
+            <View style={[styles.card, powerStyles.card]}>
+              <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Meters · tap to select · long-press to hide</Text>
+              <View style={powerStyles.meterColumns}>
+                {renderMeterColumn('Power', powerMeters)}
+                {renderMeterColumn('Water', waterMeters)}
+              </View>
+              {hiddenMeters.length > 0 ? (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={[styles.itemMeta, powerStyles.itemMeta]}>Hidden — tap to restore</Text>
+                  <View style={[styles.row, { marginTop: 6 }]}>
+                    {hiddenMeters.map((m) => (
+                      <TouchableOpacity key={m._id} style={powerStyles.restoreChip} onPress={() => restoreMeter(m._id)}>
+                        <Text style={powerStyles.restoreChipText}>
+                          {meterTypeIcon(meterTypeFor(m))} {m.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {powerTab === 'record' ? (
+            <>
+              <View style={[styles.card, powerStyles.card]}>
+                <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Record utility load</Text>
+                <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
+                  Selected: {meterLookup[selectedMeterId]?.name || '—'}
+                </Text>
+                <TextInput
+                  value={amount}
+                  onChangeText={setAmount}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Amount paid (R) *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
+                <TextInput
+                  value={units}
+                  onChangeText={setUnits}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Units loaded *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
+                <TextInput
+                  value={readingInput}
+                  onChangeText={setReadingInput}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Current meter reading *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
                 <TouchableOpacity
-                  key={type.value}
-                  style={[powerStyles.typeChip, meterType === type.value ? powerStyles.typeChipActive : null]}
-                  onPress={() => setMeterType(type.value)}
+                  style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                  onPress={() => setPowerPickerTarget('loadDate')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose transaction date"
                 >
-                  <Text style={[powerStyles.typeChipText, meterType === type.value ? powerStyles.typeChipTextActive : null]}>
-                    {type.icon} {type.label}
+                  <Text style={powerStyles.dateTouchLabel}>Transaction date *</Text>
+                  <Text style={powerStyles.dateTouchValue}>{formatPowerDate(loadDate)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.buttonPrimary, powerStyles.buttonPrimary, (savingLoad || !selectedMeterId) && styles.buttonDisabled]}
+                  disabled={savingLoad || !selectedMeterId}
+                  onPress={promptSaveLoad}
+                >
+                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>{savingLoad ? 'Saving…' : 'Save load'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={[styles.card, powerStyles.card]}>
+                <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Reading snapshot</Text>
+                <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
+                  Log a meter reading (no purchase). Uses the selected meter above.
+                </Text>
+                <TextInput
+                  value={randomReading}
+                  onChangeText={setRandomReading}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Reading *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
+                <TouchableOpacity
+                  style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                  onPress={() => setPowerPickerTarget('snapshotDate')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose reading date"
+                >
+                  <Text style={powerStyles.dateTouchLabel}>Reading date *</Text>
+                  <Text style={powerStyles.dateTouchValue}>{formatPowerDate(snapshotDate)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.buttonPrimary, powerStyles.buttonPrimary, (savingReading || !selectedMeterId) && styles.buttonDisabled]}
+                  disabled={savingReading || !selectedMeterId}
+                  onPress={promptSaveReading}
+                >
+                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>{savingReading ? 'Saving…' : 'Save reading'}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : null}
+
+          {powerTab === 'history' ? (
+            <View style={[styles.card, powerStyles.card]}>
+              <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Transaction history</Text>
+              <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>Long-press a row to edit or delete.</Text>
+              {loading ? <ActivityIndicator size="small" color="#facc15" /> : null}
+              {visibleTransactions.length === 0 ? (
+                <Text style={[styles.empty, powerStyles.empty]}>No transactions yet.</Text>
+              ) : null}
+              {visibleTransactions.map((transaction) => {
+                const m = meterLookup[transaction.meterId]
+                const isReadingOnly = (transaction.entryType || 'load') === 'reading'
+                const rd =
+                  transaction.reading != null && Number.isFinite(Number(transaction.reading)) ? Number(transaction.reading) : null
+                return (
+                  <Pressable
+                    key={transaction._id}
+                    style={[styles.itemRow, powerStyles.itemRow]}
+                    onLongPress={() => onTransactionLongPress(transaction)}
+                    delayLongPress={450}
+                  >
+                    <Text style={[styles.itemText, powerStyles.itemText]}>
+                      {isReadingOnly ? '📋 ' : '💳 '}
+                      {meterTypeIcon(meterTypeFor(m))} {m?.name || 'Unknown meter'}
+                    </Text>
+                    <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                      {isReadingOnly ? 'Reading only' : 'Load'} · {meterTypeLabel(meterTypeFor(m))}
+                      {!isReadingOnly
+                        ? ` · R ${Number(transaction.amount || 0).toFixed(2)} · ${Number(transaction.units || 0).toFixed(2)} units`
+                        : ''}
+                      {rd != null ? ` · Reading ${rd.toFixed(2)}` : ''}
+                    </Text>
+                    <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                      {new Date(transaction.date || Date.now()).toLocaleDateString()}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          ) : null}
+
+          {powerTab === 'stats' ? (
+            <View style={[styles.card, powerStyles.card]}>
+              <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Summary & usage</Text>
+              <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
+                Filter by date range. Usage between consecutive readings is counted when the newer reading falls in range.
+              </Text>
+              <TouchableOpacity
+                style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                onPress={() => setPowerPickerTarget('statsStart')}
+                accessibilityRole="button"
+              >
+                <Text style={powerStyles.dateTouchLabel}>Range start *</Text>
+                <Text style={powerStyles.dateTouchValue}>{formatPowerDate(statsStartDate)}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                onPress={() => setPowerPickerTarget('statsEnd')}
+                accessibilityRole="button"
+              >
+                <Text style={powerStyles.dateTouchLabel}>Range end *</Text>
+                <Text style={powerStyles.dateTouchValue}>{formatPowerDate(statsEndDate)}</Text>
+              </TouchableOpacity>
+              {statsBundle?.error ? <Text style={[styles.error, powerStyles.error]}>{statsBundle.error}</Text> : null}
+              {!statsBundle?.error && statsBundle ? (
+                <>
+                  <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginTop: 8 }]}>
+                    Loads in range: R {statsBundle.loadAmount.toFixed(2)} · {statsBundle.loadUnits.toFixed(2)} units purchased
+                  </Text>
+                  <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                    Avg usage / day (from reading intervals in range): {statsBundle.avgDailyFromReading.toFixed(2)}
+                  </Text>
+                  <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                    Rough 30-day projection (reading trend): {statsBundle.monthlyProjection.toFixed(2)} units
+                  </Text>
+                  <Text style={[styles.sectionTitle, powerStyles.sectionTitle, { marginTop: 12 }]}>Between readings</Text>
+                  {statsBundle.intervals.length === 0 ? (
+                    <Text style={[styles.empty, powerStyles.empty]}>No completed reading intervals in this range.</Text>
+                  ) : (
+                    statsBundle.intervals.map((row, idx) => (
+                      <View key={`${row.meterId}-${row.to}-${idx}`} style={[styles.itemRow, powerStyles.itemRow]}>
+                        <Text style={[styles.itemText, powerStyles.itemText]}>
+                          {meterTypeIcon(row.kind)} {row.meterName}
+                        </Text>
+                        <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                          Δ {row.delta.toFixed(2)} over {row.days.toFixed(2)} d · avg {row.avgPerDay.toFixed(2)}/d
+                        </Text>
+                        <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                          {new Date(row.from).toLocaleDateString()} → {new Date(row.to).toLocaleDateString()}
+                        </Text>
+                      </View>
+                    ))
+                  )}
+                </>
+              ) : null}
+            </View>
+          ) : null}
+
+          {error ? <Text style={[styles.error, powerStyles.error]}>{error}</Text> : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal visible={Platform.OS === 'ios' && powerPickerTarget !== null} animationType="slide" transparent>
+        <View style={[styles.modalBackdropCentered, styles.modalKeyboardAvoid]}>
+          <View style={[styles.dialogCard, powerStyles.card, { width: '100%', maxWidth: 400 }]}>
+            <View style={[styles.datePickerToolbar, powerStyles.datePickerToolbarPower]}>
+              <TouchableOpacity onPress={() => setPowerPickerTarget(null)} hitSlop={12}>
+                <Text style={powerStyles.dateToolbarBtn}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPowerPickerTarget(null)} hitSlop={12}>
+                <Text style={powerStyles.dateToolbarBtn}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={powerPickerValue}
+              mode="date"
+              display="spinner"
+              onChange={(_, date) => {
+                if (date) applyPowerPickerDate(date)
+              }}
+              themeVariant="light"
+            />
+          </View>
+        </View>
+      </Modal>
+      {Platform.OS === 'android' && powerPickerTarget !== null ? (
+        <DateTimePicker
+          value={powerPickerValue}
+          mode="date"
+          display="default"
+          onChange={(event, date) => {
+            if (event?.type === 'dismissed') {
+              setPowerPickerTarget(null)
+              return
+            }
+            if (date) applyPowerPickerDate(date)
+            setPowerPickerTarget(null)
+          }}
+        />
+      ) : null}
+
+      <Modal visible={editDraft !== null} animationType="fade" transparent>
+        <KeyboardAvoidingView
+          style={[styles.modalBackdropCentered, styles.modalKeyboardAvoid]}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 48 : 0}
+        >
+          <View style={[styles.dialogCard, powerStyles.card, { width: '100%', maxWidth: 420 }]}>
+            <Text style={[styles.modalTitle, powerStyles.sectionTitle]}>Edit transaction</Text>
+            <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>Meter</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
+              {meters.map((meter) => (
+                <TouchableOpacity
+                  key={meter._id}
+                  style={[powerStyles.meterChip, editDraft?.meterId === meter._id ? powerStyles.meterChipActive : null]}
+                  onPress={() => setEditDraft((prev) => (prev ? { ...prev, meterId: meter._id } : null))}
+                >
+                  <Text style={[powerStyles.meterChipText, editDraft?.meterId === meter._id ? powerStyles.meterChipTextActive : null]}>
+                    {meterTypeIcon(meterTypeFor(meter))} {meter.name}
                   </Text>
                 </TouchableOpacity>
               ))}
-            </View>
-            <TouchableOpacity style={[styles.buttonPrimary, powerStyles.buttonPrimary]} onPress={() => void addMeter()}>
-              <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>Add Meter</Text>
+            </ScrollView>
+            {editDraft?.entryType === 'load' ? (
+              <>
+                <TextInput
+                  value={editDraft.amountStr}
+                  onChangeText={(t) => setEditDraft((prev) => (prev ? { ...prev, amountStr: t } : null))}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Amount (R) *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
+                <TextInput
+                  value={editDraft.unitsStr}
+                  onChangeText={(t) => setEditDraft((prev) => (prev ? { ...prev, unitsStr: t } : null))}
+                  style={[styles.input, powerStyles.input]}
+                  placeholder="Units *"
+                  placeholderTextColor="#64748b"
+                  keyboardType="numeric"
+                />
+              </>
+            ) : (
+              <Text style={[styles.itemMeta, powerStyles.itemMeta]}>Reading snapshot — amount/units stay zero.</Text>
+            )}
+            <TextInput
+              value={editDraft?.readingStr ?? ''}
+              onChangeText={(t) => setEditDraft((prev) => (prev ? { ...prev, readingStr: t } : null))}
+              style={[styles.input, powerStyles.input]}
+              placeholder="Meter reading *"
+              placeholderTextColor="#64748b"
+              keyboardType="numeric"
+            />
+            <TouchableOpacity
+              style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+              onPress={() => setPowerPickerTarget('editDate')}
+              accessibilityRole="button"
+            >
+              <Text style={powerStyles.dateTouchLabel}>Date *</Text>
+              <Text style={powerStyles.dateTouchValue}>{editDraft ? formatPowerDate(editDraft.date) : '—'}</Text>
             </TouchableOpacity>
-          </View>
-        ) : null}
-
-        <View style={[styles.card, powerStyles.card]}>
-          <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Record Utility Load</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
-            {meters.map((meter) => (
-              <TouchableOpacity
-                key={meter._id}
-                style={[powerStyles.meterChip, selectedMeterId === meter._id ? powerStyles.meterChipActive : null]}
-                onPress={() => setSelectedMeterId(meter._id)}
-              >
-                <Text style={[powerStyles.meterChipText, selectedMeterId === meter._id ? powerStyles.meterChipTextActive : null]}>
-                  {meterTypeIcon(meterTypeFor(meter))} {meter.name}
-                </Text>
+            <View style={styles.row}>
+              <TouchableOpacity style={[styles.buttonSecondary, powerStyles.buttonSecondary]} onPress={() => setEditDraft(null)}>
+                <Text style={[styles.buttonText, powerStyles.buttonSecondaryText]}>Cancel</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            style={[styles.input, powerStyles.input]}
-            placeholder="Amount paid"
-            placeholderTextColor="#64748b"
-            keyboardType="numeric"
-          />
-          <TextInput
-            value={units}
-            onChangeText={setUnits}
-            style={[styles.input, powerStyles.input]}
-            placeholder="Units loaded"
-            placeholderTextColor="#64748b"
-            keyboardType="numeric"
-          />
-          <TextInput
-            value={dateInput}
-            onChangeText={setDateInput}
-            style={[styles.input, powerStyles.input]}
-            placeholder="Date (YYYY-MM-DD)"
-            placeholderTextColor="#64748b"
-          />
-          <TouchableOpacity style={[styles.buttonPrimary, powerStyles.buttonPrimary]} onPress={() => void addTransaction()}>
-            <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>Save Transaction</Text>
-          </TouchableOpacity>
-          {error ? <Text style={[styles.error, powerStyles.error]}>{error}</Text> : null}
-        </View>
-
-        <View style={[styles.card, powerStyles.card]}>
-          <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Utility Transactions</Text>
-          {loading ? <ActivityIndicator size="small" color="#facc15" /> : null}
-          {transactions.length === 0 ? <Text style={[styles.empty, powerStyles.empty]}>No utility transactions yet.</Text> : null}
-          {transactions.map((transaction) => (
-            <View key={transaction._id} style={[styles.itemRow, powerStyles.itemRow]}>
-              <Text style={[styles.itemText, powerStyles.itemText]}>
-                {meterTypeIcon(meterTypeFor(meterLookup[transaction.meterId]))}{' '}
-                {meterLookup[transaction.meterId]?.name || 'Unknown meter'}
-              </Text>
-              <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
-                {meterTypeLabel(meterTypeFor(meterLookup[transaction.meterId]))} |{' '}
-                R {Number(transaction.amount || 0).toFixed(2)} | {Number(transaction.units || 0).toFixed(2)} units
-              </Text>
-              <Text style={[styles.itemMeta, powerStyles.itemMeta]}>{new Date(transaction.date || Date.now()).toLocaleDateString()}</Text>
+              <TouchableOpacity
+                style={[styles.buttonPrimary, powerStyles.buttonPrimary, savingEdit && styles.buttonDisabled]}
+                disabled={savingEdit}
+                onPress={promptSaveEdit}
+              >
+                <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>{savingEdit ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
             </View>
-          ))}
-        </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -1822,6 +2505,35 @@ const powerStyles = StyleSheet.create({
   },
   buttonPrimary: { backgroundColor: '#facc15' },
   buttonPrimaryText: { color: '#0b3b75', fontWeight: '900' },
+  buttonSecondary: {
+    backgroundColor: '#082f5c',
+    borderWidth: 1,
+    borderColor: '#facc15',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    minWidth: 100,
+  },
+  buttonSecondaryText: { color: '#dbeafe', fontWeight: '700' },
+  dateTouch: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dateTouchLabel: { color: '#64748b', fontSize: 13, fontWeight: '600' },
+  dateTouchValue: { color: '#0b3b75', fontWeight: '800', fontSize: 15 },
+  datePickerToolbarPower: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 8,
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#bfdbfe',
+  },
+  dateToolbarBtn: { color: '#1d4ed8', fontWeight: '800', fontSize: 16 },
   typeChip: {
     flex: 1,
     minWidth: 110,
@@ -1856,6 +2568,59 @@ const powerStyles = StyleSheet.create({
   },
   meterChipText: { color: '#0b3b75', fontWeight: '700' },
   meterChipTextActive: { color: '#0b3b75', fontWeight: '900' },
+  powerTabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#082f5c',
+    marginHorizontal: 12,
+    marginTop: 4,
+    borderRadius: 12,
+    padding: 4,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#facc15',
+  },
+  powerTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  powerTabActive: { backgroundColor: '#facc15' },
+  powerTabText: { color: '#dbeafe', fontWeight: '700', fontSize: 12 },
+  powerTabTextActive: { color: '#0b3b75' },
+  meterColumns: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+  },
+  meterColumn: { flex: 1, minWidth: 0 },
+  meterColumnTitle: {
+    color: '#0b3b75',
+    fontWeight: '800',
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  meterColumnChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#ffffff',
+    marginBottom: 8,
+  },
+  meterColumnChipText: { color: '#0b3b75', fontWeight: '700', fontSize: 13 },
+  restoreChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#94a3b8',
+    backgroundColor: '#ffffff',
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  restoreChipText: { color: '#334155', fontSize: 12, fontWeight: '600' },
   itemRow: { borderTopColor: '#bfdbfe' },
   itemText: { color: '#0b3b75' },
   itemMeta: { color: '#1e40af' },

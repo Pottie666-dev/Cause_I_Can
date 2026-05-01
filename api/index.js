@@ -445,7 +445,21 @@ app.get('/api/meter-transactions', async (req, res) => {
     const db = await getDb()
     const filter = meterId ? { meterId } : {}
     const transactions = await db.collection('meter_transactions').find(filter).sort({ date: -1 }).toArray()
-    res.json(transactions.map(serializeId))
+    res.json(
+      transactions.map((doc) => {
+        const row = serializeId(doc)
+        const readingRaw = doc.reading
+        const reading =
+          readingRaw !== undefined && readingRaw !== null && readingRaw !== ''
+            ? Number(readingRaw)
+            : null
+        return {
+          ...row,
+          reading: Number.isFinite(reading) ? reading : null,
+          entryType: doc.entryType === 'reading' ? 'reading' : 'load',
+        }
+      }),
+    )
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
   }
@@ -457,9 +471,30 @@ app.post('/api/meter-transactions', async (req, res) => {
     const amount = Number(req.body?.amount || 0)
     const units = Number(req.body?.units || 0)
     const date = Number(req.body?.date || Date.now())
+    const entryType = req.body?.entryType === 'reading' ? 'reading' : 'load'
+    const readingRaw = req.body?.reading
+    let reading = null
+    if (readingRaw !== undefined && readingRaw !== null && readingRaw !== '') {
+      const n = Number(readingRaw)
+      reading = Number.isFinite(n) ? n : null
+    }
     if (!meterId) {
       res.status(400).json({ ok: false, error: 'Meter is required' })
       return
+    }
+    if (entryType === 'reading' && reading === null) {
+      res.status(400).json({ ok: false, error: 'Reading is required for a reading entry' })
+      return
+    }
+    if (entryType === 'load') {
+      if (reading === null) {
+        res.status(400).json({ ok: false, error: 'Reading is required for a load entry' })
+        return
+      }
+      if (!Number.isFinite(amount) || !Number.isFinite(units)) {
+        res.status(400).json({ ok: false, error: 'Amount and units are required for a load entry' })
+        return
+      }
     }
     const db = await getDb()
     const result = await db.collection('meter_transactions').insertOne({
@@ -468,9 +503,108 @@ app.post('/api/meter-transactions', async (req, res) => {
       amount,
       units,
       date,
+      reading,
+      entryType,
       createdAt: Date.now(),
     })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
+app.patch('/api/meter-transactions/:id', async (req, res) => {
+  try {
+    const id = toId(req.params.id)
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'Invalid id' })
+      return
+    }
+    const db = await getDb()
+    const existing = await db.collection('meter_transactions').findOne({ _id: id })
+    if (!existing) {
+      res.status(404).json({ ok: false, error: 'Transaction not found' })
+      return
+    }
+
+    const patch = {}
+    if (typeof req.body?.meterId === 'string' && req.body.meterId.trim()) {
+      patch.meterId = req.body.meterId.trim()
+    }
+    if (typeof req.body?.amount === 'number' && !Number.isNaN(req.body.amount)) {
+      patch.amount = req.body.amount
+    }
+    if (typeof req.body?.units === 'number' && !Number.isNaN(req.body.units)) {
+      patch.units = req.body.units
+    }
+    if (typeof req.body?.date === 'number' && !Number.isNaN(req.body.date)) {
+      patch.date = req.body.date
+    }
+    if (req.body?.entryType === 'reading') {
+      patch.entryType = 'reading'
+    } else if (req.body?.entryType === 'load') {
+      patch.entryType = 'load'
+    }
+    if (req.body?.reading !== undefined) {
+      const raw = req.body.reading
+      if (raw === null || raw === '') {
+        patch.reading = null
+      } else {
+        const n = Number(raw)
+        patch.reading = Number.isFinite(n) ? n : null
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ ok: false, error: 'Nothing to update' })
+      return
+    }
+
+    const merged = { ...existing, ...patch }
+    const et = merged.entryType === 'reading' ? 'reading' : 'load'
+    const rd =
+      merged.reading !== undefined && merged.reading !== null && merged.reading !== ''
+        ? Number(merged.reading)
+        : null
+    const reading = Number.isFinite(rd) ? rd : null
+    if (et === 'reading' && reading === null) {
+      res.status(400).json({ ok: false, error: 'Reading is required for a reading entry' })
+      return
+    }
+    if (et === 'load') {
+      if (reading === null) {
+        res.status(400).json({ ok: false, error: 'Reading is required for a load entry' })
+        return
+      }
+      const am = Number(merged.amount)
+      const un = Number(merged.units)
+      if (!Number.isFinite(am) || !Number.isFinite(un)) {
+        res.status(400).json({ ok: false, error: 'Amount and units are required for a load entry' })
+        return
+      }
+    }
+
+    await db.collection('meter_transactions').updateOne({ _id: id }, { $set: patch })
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
+app.delete('/api/meter-transactions/:id', async (req, res) => {
+  try {
+    const id = toId(req.params.id)
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'Invalid id' })
+      return
+    }
+    const db = await getDb()
+    const result = await db.collection('meter_transactions').deleteOne({ _id: id })
+    if (result.deletedCount === 0) {
+      res.status(404).json({ ok: false, error: 'Transaction not found' })
+      return
+    }
+    res.json({ ok: true })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
   }
