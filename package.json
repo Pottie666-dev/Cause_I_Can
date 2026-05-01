@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "expo start",
+    "dev:tunnel": "expo start --tunnel --clear",
     "dev:api": "node api/index.js",
     "start": "expo start",
     "render:start": "node api/index.js",
