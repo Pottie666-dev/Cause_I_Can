@@ -17,6 +17,7 @@
       "supportsTablet": true
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./public/expo-icon.png",
         "backgroundColor": "#ffffff"
@@ -24,6 +25,9 @@
     },
     "web": {
       "favicon": "./public/favicon.ico"
-    }
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ]
   }
 }

@@ -49,6 +49,18 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function startOfDayMs(ts) {
+  const d = new Date(Number(ts))
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+function addCalendarDaysMs(ms, n) {
+  const d = new Date(startOfDayMs(ms))
+  d.setDate(d.getDate() + n)
+  return d.getTime()
+}
+
 async function ensureUsersSeeded(db) {
   const usersCollection = db.collection('users')
   for (const account of seededAccounts) {
@@ -166,6 +178,13 @@ app.get('/api/pawn-tickets', async (_req, res) => {
         returnDate: ticket.returnDate ?? null,
         totalRepayAmount: ticket.totalRepayAmount ?? 0,
         items: Array.isArray(ticket.items) ? ticket.items : [],
+        status: ticket.status || 'open',
+        collectedAt: ticket.collectedAt ?? null,
+        lostAt: ticket.lostAt ?? null,
+        extendedAt: ticket.extendedAt ?? null,
+        extendedToTicketId: ticket.extendedToTicketId ? String(ticket.extendedToTicketId) : null,
+        extendedFromTicketId: ticket.extendedFromTicketId ? String(ticket.extendedFromTicketId) : null,
+        priority: Math.min(5, Math.max(1, Math.round(Number(ticket.priority)) || 3)),
       })),
     )
   } catch (error) {
@@ -199,12 +218,16 @@ app.post('/api/pawn-tickets', async (req, res) => {
       return
     }
 
+    const priority = Math.min(5, Math.max(1, Math.round(Number(req.body?.priority)) || 3))
+
     const result = await db.collection('pawn_tickets').insertOne({
       shopName,
       pawnedDate,
       returnDate: returnDate || null,
       totalRepayAmount,
       items,
+      status: 'open',
+      priority,
       createdAt: Date.now(),
     })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
@@ -213,10 +236,130 @@ app.post('/api/pawn-tickets', async (req, res) => {
   }
 })
 
+app.patch('/api/pawn-tickets/:id', async (req, res) => {
+  try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
+    const id = toId(req.params.id)
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'Invalid id' })
+      return
+    }
+
+    const ticket = await db.collection('pawn_tickets').findOne({ _id: id })
+    if (!ticket) {
+      res.status(404).json({ ok: false, error: 'Ticket not found' })
+      return
+    }
+
+    if (req.body && typeof req.body.priority === 'number' && !Number.isNaN(req.body.priority)) {
+      const p = Math.min(5, Math.max(1, Math.round(req.body.priority)))
+      await db.collection('pawn_tickets').updateOne({ _id: id }, { $set: { priority: p } })
+      res.json({ ok: true })
+      return
+    }
+
+    const currentStatus = ticket.status || 'open'
+    if (currentStatus !== 'open') {
+      res.status(400).json({ ok: false, error: 'This ticket is already closed' })
+      return
+    }
+
+    const action = typeof req.body?.action === 'string' ? req.body.action : ''
+
+    if (action === 'lost') {
+      await db.collection('pawn_tickets').updateOne({ _id: id }, { $set: { status: 'lost', lostAt: Date.now() } })
+      res.json({ ok: true })
+      return
+    }
+
+    if (action === 'collect') {
+      const collectedAt = Number(req.body?.collectedAt || Date.now())
+      await db.collection('pawn_tickets').updateOne(
+        { _id: id },
+        { $set: { status: 'collected', collectedAt } },
+      )
+      res.json({ ok: true })
+      return
+    }
+
+    if (action === 'extend') {
+      const ext = Number(req.body?.extendedDate)
+      if (!ext || Number.isNaN(ext)) {
+        res.status(400).json({ ok: false, error: 'extendedDate is required' })
+        return
+      }
+      const pawned = startOfDayMs(ext)
+      const ret = addCalendarDaysMs(pawned, 30)
+      const items = Array.isArray(ticket.items) ? ticket.items : []
+      const carryPriority = Math.min(5, Math.max(1, Math.round(Number(ticket.priority)) || 3))
+      const insertResult = await db.collection('pawn_tickets').insertOne({
+        shopName: ticket.shopName,
+        pawnedDate: pawned,
+        returnDate: ret,
+        totalRepayAmount: Number(ticket.totalRepayAmount || 0),
+        items,
+        status: 'open',
+        priority: carryPriority,
+        extendedFromTicketId: id,
+        createdAt: Date.now(),
+      })
+      await db.collection('pawn_tickets').updateOne(
+        { _id: id },
+        {
+          $set: {
+            status: 'extended',
+            extendedAt: Date.now(),
+            extendedToTicketId: insertResult.insertedId,
+          },
+        },
+      )
+      res.json({ ok: true, newTicketId: String(insertResult.insertedId) })
+      return
+    }
+
+    res.status(400).json({ ok: false, error: 'Invalid action' })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
+app.delete('/api/pawn-tickets/:id', async (req, res) => {
+  try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
+    const id = toId(req.params.id)
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'Invalid id' })
+      return
+    }
+
+    const result = await db.collection('pawn_tickets').deleteOne({ _id: id })
+    if (result.deletedCount === 0) {
+      res.status(404).json({ ok: false, error: 'Ticket not found' })
+      return
+    }
+
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
 app.get('/api/pawn-shops', async (_req, res) => {
   try {
     const db = await getDb()
-    const shops = await db.collection('pawn_shops').find({}).sort({ name: 1 }).toArray()
+    const shops = await db.collection('pawn_shops').find({}).sort({ createdAt: 1, _id: 1 }).toArray()
     res.json(
       shops.map((shop) => ({
         _id: String(shop._id),
