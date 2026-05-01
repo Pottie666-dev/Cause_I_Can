@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -198,6 +199,10 @@ function TopBar({ title, onBack, onRefresh }) {
 
 function PawnScreen({ user, onBack }) {
   const [tickets, setTickets] = useState([])
+  const [pawnShops, setPawnShops] = useState([])
+  const [shopPickerOpen, setShopPickerOpen] = useState(false)
+  const [addShopOpen, setAddShopOpen] = useState(false)
+  const [addShopName, setAddShopName] = useState('')
   const [shopName, setShopName] = useState('')
   const [pawnedDate, setPawnedDate] = useState('')
   const [returnDate, setReturnDate] = useState('')
@@ -212,8 +217,9 @@ function PawnScreen({ user, onBack }) {
     setLoading(true)
     setError('')
     try {
-      const data = await apiFetch('/api/pawn-tickets')
-      setTickets(data)
+      const [ticketData, shopData] = await Promise.all([apiFetch('/api/pawn-tickets'), apiFetch('/api/pawn-shops')])
+      setTickets(ticketData)
+      setPawnShops(shopData)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load pawn tickets')
     } finally {
@@ -264,13 +270,101 @@ function PawnScreen({ user, onBack }) {
     }
   }
 
+  const saveNewShopFromDialog = async () => {
+    const name = addShopName.trim()
+    if (!name) return
+    setLoading(true)
+    setError('')
+    try {
+      await apiFetch('/api/pawn-shops', {
+        method: 'POST',
+        body: JSON.stringify({ userId: user?._id, name }),
+      })
+      setAddShopName('')
+      setAddShopOpen(false)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save shop')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <TopBar title="Pawn Shit" onBack={onBack} onRefresh={refresh} />
+      <Modal visible={addShopOpen} animationType="fade" transparent>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.dialogCard}>
+            <Text style={styles.modalTitle}>Add pawn shop</Text>
+            <TextInput
+              value={addShopName}
+              onChangeText={setAddShopName}
+              style={styles.input}
+              placeholder="Shop name"
+              autoFocus
+            />
+            <View style={styles.row}>
+              <TouchableOpacity style={styles.buttonSecondary} onPress={() => { setAddShopOpen(false); setAddShopName('') }}>
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.buttonPrimary, !addShopName.trim() ? styles.buttonDisabled : null]}
+                disabled={!addShopName.trim()}
+                onPress={() => void saveNewShopFromDialog()}
+              >
+                <Text style={styles.buttonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={shopPickerOpen} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Saved pawn shops</Text>
+            <ScrollView style={styles.modalList} keyboardShouldPersistTaps="handled">
+              {pawnShops.length === 0 ? (
+                <Text style={styles.empty}>No shops saved yet. Tap + above New Ticket to add one.</Text>
+              ) : null}
+              {pawnShops.map((shop) => (
+                <TouchableOpacity
+                  key={shop._id}
+                  style={styles.modalRow}
+                  onPress={() => {
+                    setShopName(shop.name)
+                    setShopPickerOpen(false)
+                  }}
+                >
+                  <Text style={styles.itemText}>{shop.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.buttonSecondary} onPress={() => setShopPickerOpen(false)}>
+              <Text style={styles.buttonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
       <ScrollView contentContainerStyle={styles.contentWrap}>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>New Ticket</Text>
+          <View style={styles.newTicketHeader}>
+            <Text style={[styles.sectionTitle, styles.sectionTitleNoMb]}>New Ticket</Text>
+            <TouchableOpacity
+              style={styles.addShopPlus}
+              onPress={() => {
+                setAddShopName('')
+                setAddShopOpen(true)
+              }}
+              accessibilityLabel="Add pawn shop to saved list"
+            >
+              <Text style={styles.addShopPlusText}>+</Text>
+            </TouchableOpacity>
+          </View>
           <TextInput value={shopName} onChangeText={setShopName} style={styles.input} placeholder="Pawn shop name" />
+          <TouchableOpacity onPress={() => setShopPickerOpen(true)}>
+            <Text style={styles.linkButton}>Pick saved shop</Text>
+          </TouchableOpacity>
           <TextInput
             value={pawnedDate}
             onChangeText={setPawnedDate}
@@ -837,6 +931,7 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: '#ffffff', fontWeight: '700' },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 },
+  sectionTitleNoMb: { marginBottom: 0 },
   itemRow: {
     borderTopColor: '#e2e8f0',
     borderTopWidth: 1,
@@ -869,6 +964,68 @@ const styles = StyleSheet.create({
   priority_red: { backgroundColor: '#fee2e2' },
   prioritySelected: { borderColor: '#0f172a', borderWidth: 2 },
   priorityText: { fontSize: 12, fontWeight: '700', color: '#111827' },
+  buttonDisabled: { opacity: 0.45 },
+  newTicketHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  addShopPlus: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#4f46e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addShopPlusText: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '300',
+    marginTop: -2,
+  },
+  linkButton: {
+    color: '#4f46e5',
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 8,
+    marginTop: -4,
+  },
+  modalBackdropCentered: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  dialogCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    maxHeight: '70%',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 12 },
+  modalList: { maxHeight: 320, marginBottom: 12 },
+  modalRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
   smallButton: {
     backgroundColor: '#e2e8f0',
     borderRadius: 8,

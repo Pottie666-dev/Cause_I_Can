@@ -213,6 +213,51 @@ app.post('/api/pawn-tickets', async (req, res) => {
   }
 })
 
+app.get('/api/pawn-shops', async (_req, res) => {
+  try {
+    const db = await getDb()
+    const shops = await db.collection('pawn_shops').find({}).sort({ name: 1 }).toArray()
+    res.json(
+      shops.map((shop) => ({
+        _id: String(shop._id),
+        name: shop.name,
+      })),
+    )
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
+app.post('/api/pawn-shops', async (req, res) => {
+  try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+    if (!name) {
+      res.status(400).json({ ok: false, error: 'Shop name is required' })
+      return
+    }
+
+    const existing = await db.collection('pawn_shops').findOne({
+      name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' },
+    })
+    if (existing) {
+      res.json({ ok: true, _id: String(existing._id), duplicate: true })
+      return
+    }
+
+    const result = await db.collection('pawn_shops').insertOne({ name, createdAt: Date.now() })
+    res.status(201).json({ ok: true, _id: String(result.insertedId) })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
 app.get('/api/meters', async (_req, res) => {
   try {
     const db = await getDb()
