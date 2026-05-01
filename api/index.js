@@ -19,7 +19,7 @@ const seededAccounts = [
 
 async function getDb() {
   const uri = process.env.MONGODB_URI || process.env.RIDGEWAY_MONGODB_URI
-  const dbName = process.env.MONGODB_DB || process.env.RIDGEWAY_MONGODB_DB || 'ridgeway-mansion'
+  const dbName = process.env.MONGODB_DB || process.env.RIDGEWAY_MONGODB_DB || 'RidgewayMansion'
 
   if (!uri) {
     throw new Error('Missing MONGODB_URI (or RIDGEWAY_MONGODB_URI)')
@@ -81,7 +81,12 @@ app.get('/health', async (_req, res) => {
   try {
     const db = await getDb()
     await db.command({ ping: 1 })
-    res.json({ ok: true, service: 'ridgeway-mansion-api', db: 'connected' })
+    res.json({
+      ok: true,
+      service: 'ridgeway-mansion-api',
+      db: 'connected',
+      database: db.databaseName,
+    })
   } catch (error) {
     res.status(500).json({
       ok: false,

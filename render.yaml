@@ -6,3 +6,6 @@ services:
     buildCommand: npm ci
     startCommand: npm run api:start
     autoDeploy: true
+    envVars:
+      - key: MONGODB_DB
+        value: RidgewayMansion
