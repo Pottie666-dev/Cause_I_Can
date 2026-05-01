@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: ridgeway-mansion-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run api:start
+    autoDeploy: true

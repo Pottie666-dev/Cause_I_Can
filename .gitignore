@@ -12,7 +12,6 @@ node_modules
 .expo/
 
 /build/
-/api/
 /server/build
 /public/build
 /dist/
