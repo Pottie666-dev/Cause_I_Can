@@ -405,7 +405,12 @@ app.get('/api/meters', async (_req, res) => {
   try {
     const db = await getDb()
     const meters = await db.collection('meters').find({}).sort({ createdAt: -1 }).toArray()
-    res.json(meters.map(serializeId))
+    res.json(
+      meters.map((meter) => ({
+        ...serializeId(meter),
+        meterType: meter.meterType === 'water' ? 'water' : 'power',
+      })),
+    )
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
   }
@@ -422,11 +427,12 @@ app.post('/api/meters', async (req, res) => {
 
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
     const meterNumber = typeof req.body?.meterNumber === 'string' ? req.body.meterNumber.trim() : ''
+    const meterType = req.body?.meterType === 'water' ? 'water' : 'power'
     if (!name) {
       res.status(400).json({ ok: false, error: 'Meter name is required' })
       return
     }
-    const result = await db.collection('meters').insertOne({ name, meterNumber, createdAt: Date.now() })
+    const result = await db.collection('meters').insertOne({ name, meterNumber, meterType, createdAt: Date.now() })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })

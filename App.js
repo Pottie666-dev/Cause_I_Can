@@ -52,13 +52,30 @@ function ticketPriority(ticket) {
   return Math.min(5, Math.max(1, Math.round(Number(ticket.priority)) || 3))
 }
 
-/** Darker palette accents — P1 darkest, P5 strongest gold-brown */
+/** Priority accents get darker as urgency increases from P1 to P5. */
 const PAWN_PRIORITY_ACCENT = {
-  1: '#1a0f0c',
-  2: '#2c1810',
-  3: '#4e110a',
-  4: '#5c3d14',
-  5: '#7a5c1a',
+  1: '#9a7b4f',
+  2: '#7a5c1a',
+  3: '#5c3d14',
+  4: '#4e110a',
+  5: '#2c0b06',
+}
+
+const METER_TYPES = [
+  { value: 'power', label: 'Power', icon: '⚡' },
+  { value: 'water', label: 'Water', icon: '💧' },
+]
+
+function meterTypeFor(meter) {
+  return meter?.meterType === 'water' ? 'water' : 'power'
+}
+
+function meterTypeLabel(value) {
+  return METER_TYPES.find((type) => type.value === value)?.label || 'Power'
+}
+
+function meterTypeIcon(value) {
+  return METER_TYPES.find((type) => type.value === value)?.icon || '⚡'
 }
 
 const allDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -201,7 +218,7 @@ export default function App() {
                 onPress={() => setScreen('pawn')}
               />
             ) : null}
-            <DashboardTile icon="⚡" label="Power H20" onPress={() => setScreen('power')} />
+            <DashboardTile icon="⚡" label="Power H20" variant="power" onPress={() => setScreen('power')} />
             <DashboardTile icon="🛒" label="SHOPList" onPress={() => setScreen('shop')} />
             <DashboardTile icon="📅" label="D & Z" onPress={() => setScreen('chores')} />
           </View>
@@ -255,25 +272,35 @@ export default function App() {
   )
 }
 
-function DashboardTile({ icon, label, imageSource, onPress }) {
+function DashboardTile({ icon, label, imageSource, variant, onPress }) {
+  const isPower = variant === 'power'
   return (
-    <TouchableOpacity style={styles.tile} onPress={onPress}>
-      {imageSource ? <Image source={imageSource} style={styles.tileImage} resizeMode="cover" /> : <Text style={styles.tileIcon}>{icon}</Text>}
-      <Text style={styles.tileLabel}>{label}</Text>
+    <TouchableOpacity style={[styles.tile, isPower && powerStyles.dashboardTile]} onPress={onPress}>
+      {imageSource ? (
+        <Image source={imageSource} style={styles.tileImage} resizeMode="cover" />
+      ) : isPower ? (
+        <View style={powerStyles.dashboardIconRing}>
+          <Text style={[styles.tileIcon, powerStyles.dashboardIcon]}>{icon}</Text>
+        </View>
+      ) : (
+        <Text style={styles.tileIcon}>{icon}</Text>
+      )}
+      <Text style={[styles.tileLabel, isPower && powerStyles.dashboardTileLabel]}>{label}</Text>
     </TouchableOpacity>
   )
 }
 
 function TopBar({ title, onBack, onRefresh, variant }) {
   const pawn = variant === 'pawn'
+  const power = variant === 'power'
   return (
-    <View style={[styles.topBar, pawn && pawnStyles.topBar]}>
+    <View style={[styles.topBar, pawn && pawnStyles.topBar, power && powerStyles.topBar]}>
       <TouchableOpacity style={styles.topButton} onPress={onBack}>
-        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink]}>Back</Text>
+        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink]}>Back</Text>
       </TouchableOpacity>
-      <Text style={[styles.topTitle, pawn && pawnStyles.topBarTitle]}>{title}</Text>
+      <Text style={[styles.topTitle, pawn && pawnStyles.topBarTitle, power && powerStyles.topBarTitle]}>{title}</Text>
       <TouchableOpacity style={styles.topButton} onPress={() => void onRefresh()}>
-        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink]}>Refresh</Text>
+        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink]}>Refresh</Text>
       </TouchableOpacity>
     </View>
   )
@@ -1062,6 +1089,7 @@ function PowerScreen({ user, onBack }) {
   const [transactions, setTransactions] = useState([])
   const [meterName, setMeterName] = useState('')
   const [meterNumber, setMeterNumber] = useState('')
+  const [meterType, setMeterType] = useState('power')
   const [selectedMeterId, setSelectedMeterId] = useState('')
   const [amount, setAmount] = useState('')
   const [units, setUnits] = useState('')
@@ -1092,10 +1120,11 @@ function PowerScreen({ user, onBack }) {
     if (!meterName.trim()) return
     await apiFetch('/api/meters', {
       method: 'POST',
-      body: JSON.stringify({ userId: user?._id, name: meterName.trim(), meterNumber: meterNumber.trim() }),
+      body: JSON.stringify({ userId: user?._id, name: meterName.trim(), meterNumber: meterNumber.trim(), meterType }),
     })
     setMeterName('')
     setMeterNumber('')
+    setMeterType('power')
     await refresh()
   }
 
@@ -1120,8 +1149,8 @@ function PowerScreen({ user, onBack }) {
   const meterLookup = Object.fromEntries(meters.map((meter) => [meter._id, meter]))
 
   return (
-    <SafeAreaView style={styles.container}>
-      <TopBar title="Power H20" onBack={onBack} onRefresh={refresh} />
+    <SafeAreaView style={[styles.container, powerStyles.screen]}>
+      <TopBar title="Power H20" variant="power" onBack={onBack} onRefresh={refresh} />
       <KeyboardAvoidingView
         style={styles.keyboardFlex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1133,59 +1162,100 @@ function PowerScreen({ user, onBack }) {
           contentContainerStyle={[styles.contentWrap, styles.formScrollBottom]}
         >
         {isAdmin(user) ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Add Meter</Text>
-            <TextInput value={meterName} onChangeText={setMeterName} style={styles.input} placeholder="Meter name" />
+          <View style={[styles.card, powerStyles.card]}>
+            <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Add Meter</Text>
+            <TextInput
+              value={meterName}
+              onChangeText={setMeterName}
+              style={[styles.input, powerStyles.input]}
+              placeholder="Meter name"
+              placeholderTextColor="#64748b"
+            />
             <TextInput
               value={meterNumber}
               onChangeText={setMeterNumber}
-              style={styles.input}
+              style={[styles.input, powerStyles.input]}
               placeholder="Meter number (optional)"
+              placeholderTextColor="#64748b"
             />
-            <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addMeter()}>
-              <Text style={styles.buttonText}>Add Meter</Text>
+            <View style={styles.row}>
+              {METER_TYPES.map((type) => (
+                <TouchableOpacity
+                  key={type.value}
+                  style={[powerStyles.typeChip, meterType === type.value ? powerStyles.typeChipActive : null]}
+                  onPress={() => setMeterType(type.value)}
+                >
+                  <Text style={[powerStyles.typeChipText, meterType === type.value ? powerStyles.typeChipTextActive : null]}>
+                    {type.icon} {type.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={[styles.buttonPrimary, powerStyles.buttonPrimary]} onPress={() => void addMeter()}>
+              <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>Add Meter</Text>
             </TouchableOpacity>
           </View>
         ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Record Utility Load</Text>
+        <View style={[styles.card, powerStyles.card]}>
+          <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Record Utility Load</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
             {meters.map((meter) => (
               <TouchableOpacity
                 key={meter._id}
-                style={[styles.chip, selectedMeterId === meter._id ? styles.chipActive : null]}
+                style={[powerStyles.meterChip, selectedMeterId === meter._id ? powerStyles.meterChipActive : null]}
                 onPress={() => setSelectedMeterId(meter._id)}
               >
-                <Text style={selectedMeterId === meter._id ? styles.chipTextActive : styles.chipText}>{meter.name}</Text>
+                <Text style={[powerStyles.meterChipText, selectedMeterId === meter._id ? powerStyles.meterChipTextActive : null]}>
+                  {meterTypeIcon(meterTypeFor(meter))} {meter.name}
+                </Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
-          <TextInput value={amount} onChangeText={setAmount} style={styles.input} placeholder="Amount paid" keyboardType="numeric" />
-          <TextInput value={units} onChangeText={setUnits} style={styles.input} placeholder="Units loaded" keyboardType="numeric" />
+          <TextInput
+            value={amount}
+            onChangeText={setAmount}
+            style={[styles.input, powerStyles.input]}
+            placeholder="Amount paid"
+            placeholderTextColor="#64748b"
+            keyboardType="numeric"
+          />
+          <TextInput
+            value={units}
+            onChangeText={setUnits}
+            style={[styles.input, powerStyles.input]}
+            placeholder="Units loaded"
+            placeholderTextColor="#64748b"
+            keyboardType="numeric"
+          />
           <TextInput
             value={dateInput}
             onChangeText={setDateInput}
-            style={styles.input}
+            style={[styles.input, powerStyles.input]}
             placeholder="Date (YYYY-MM-DD)"
+            placeholderTextColor="#64748b"
           />
-          <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addTransaction()}>
-            <Text style={styles.buttonText}>Save Transaction</Text>
+          <TouchableOpacity style={[styles.buttonPrimary, powerStyles.buttonPrimary]} onPress={() => void addTransaction()}>
+            <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>Save Transaction</Text>
           </TouchableOpacity>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {error ? <Text style={[styles.error, powerStyles.error]}>{error}</Text> : null}
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Utility Transactions</Text>
-          {loading ? <ActivityIndicator size="small" color="#4f46e5" /> : null}
-          {transactions.length === 0 ? <Text style={styles.empty}>No utility transactions yet.</Text> : null}
+        <View style={[styles.card, powerStyles.card]}>
+          <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Utility Transactions</Text>
+          {loading ? <ActivityIndicator size="small" color="#facc15" /> : null}
+          {transactions.length === 0 ? <Text style={[styles.empty, powerStyles.empty]}>No utility transactions yet.</Text> : null}
           {transactions.map((transaction) => (
-            <View key={transaction._id} style={styles.itemRow}>
-              <Text style={styles.itemText}>{meterLookup[transaction.meterId]?.name || 'Unknown meter'}</Text>
-              <Text style={styles.itemMeta}>
+            <View key={transaction._id} style={[styles.itemRow, powerStyles.itemRow]}>
+              <Text style={[styles.itemText, powerStyles.itemText]}>
+                {meterTypeIcon(meterTypeFor(meterLookup[transaction.meterId]))}{' '}
+                {meterLookup[transaction.meterId]?.name || 'Unknown meter'}
+              </Text>
+              <Text style={[styles.itemMeta, powerStyles.itemMeta]}>
+                {meterTypeLabel(meterTypeFor(meterLookup[transaction.meterId]))} |{' '}
                 R {Number(transaction.amount || 0).toFixed(2)} | {Number(transaction.units || 0).toFixed(2)} units
               </Text>
-              <Text style={styles.itemMeta}>{new Date(transaction.date || Date.now()).toLocaleDateString()}</Text>
+              <Text style={[styles.itemMeta, powerStyles.itemMeta]}>{new Date(transaction.date || Date.now()).toLocaleDateString()}</Text>
             </View>
           ))}
         </View>
@@ -1708,6 +1778,89 @@ const pawnStyles = StyleSheet.create({
   actionIconTinyLost: { color: '#b91c1c', fontSize: 13, fontWeight: '900' },
   actionBtnTinyDelete: { backgroundColor: '#e7e5e4', borderColor: '#57534e' },
   actionIconTinyDelete: { fontSize: 12 },
+})
+
+const powerStyles = StyleSheet.create({
+  screen: { backgroundColor: '#0b3b75' },
+  dashboardTile: {
+    borderColor: '#1d4ed8',
+    backgroundColor: '#eff6ff',
+  },
+  dashboardIconRing: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 3,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  dashboardIcon: {
+    marginBottom: 0,
+    color: '#facc15',
+  },
+  dashboardTileLabel: { color: '#0b3b75' },
+  topBar: {
+    backgroundColor: '#0b3b75',
+    borderBottomColor: '#facc15',
+    borderBottomWidth: 2,
+  },
+  topBarTitle: { color: '#facc15' },
+  topBarLink: { color: '#dbeafe' },
+  card: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#facc15',
+    borderWidth: 1,
+  },
+  sectionTitle: { color: '#0b3b75' },
+  input: {
+    borderColor: '#1d4ed8',
+    backgroundColor: '#ffffff',
+    color: '#0f172a',
+  },
+  buttonPrimary: { backgroundColor: '#facc15' },
+  buttonPrimaryText: { color: '#0b3b75', fontWeight: '900' },
+  typeChip: {
+    flex: 1,
+    minWidth: 110,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+  },
+  typeChipActive: {
+    backgroundColor: '#facc15',
+    borderColor: '#0b3b75',
+    borderWidth: 2,
+  },
+  typeChipText: { color: '#0b3b75', fontWeight: '800' },
+  typeChipTextActive: { color: '#0b3b75' },
+  meterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#ffffff',
+    marginRight: 8,
+  },
+  meterChipActive: {
+    backgroundColor: '#facc15',
+    borderColor: '#0b3b75',
+    borderWidth: 2,
+  },
+  meterChipText: { color: '#0b3b75', fontWeight: '700' },
+  meterChipTextActive: { color: '#0b3b75', fontWeight: '900' },
+  itemRow: { borderTopColor: '#bfdbfe' },
+  itemText: { color: '#0b3b75' },
+  itemMeta: { color: '#1e40af' },
+  empty: { color: '#1e40af' },
+  error: { color: '#b91c1c' },
 })
 
 const styles = StyleSheet.create({
