@@ -11,10 +11,10 @@ app.use(express.json())
 let mongoClient = null
 
 const seededAccounts = [
-  { username: 'u1', name: 'Pottie', password: 'Poison6', role: 'admin' },
+  { username: 'u1', name: 'Pottie', password: 'Pottie996', role: 'admin' },
   { username: 'u2', name: 'Lizele', password: 'LizPot996', role: 'admin' },
   { username: 'u3', name: 'Danelle', password: '@143', role: 'member' },
-  { username: 'u4', name: 'Suzelle', password: '5192', role: 'member' },
+  { username: 'u4', name: 'Suzelle', password: '2304', role: 'member' },
 ]
 
 async function getDb() {
@@ -45,15 +45,36 @@ function serializeId(doc) {
   return { ...doc, _id: String(doc._id) }
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 async function ensureUsersSeeded(db) {
   const usersCollection = db.collection('users')
   for (const account of seededAccounts) {
     await usersCollection.updateOne(
       { username: account.username },
-      { $setOnInsert: { ...account, createdAt: Date.now() } },
+      { $set: account, $setOnInsert: { createdAt: Date.now() } },
       { upsert: true },
     )
   }
+}
+
+async function getRequestUser(db, req) {
+  await ensureUsersSeeded(db)
+  const userId = req.body?.userId || req.query?.userId || req.headers['x-user-id']
+  const id = typeof userId === 'string' ? toId(userId) : null
+  if (!id) return null
+
+  return await db.collection('users').findOne({ _id: id })
+}
+
+function isAdmin(user) {
+  return user?.role === 'admin'
+}
+
+function sendForbidden(res) {
+  res.status(403).json({ ok: false, error: 'You do not have permission for this action' })
 }
 
 app.get('/health', async (_req, res) => {
@@ -78,11 +99,17 @@ app.post('/api/auth/login', async (req, res) => {
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
     const password = typeof req.body?.password === 'string' ? req.body.password : ''
     if (!username || !password) {
-      res.status(400).json({ ok: false, error: 'Username and password are required' })
+      res.status(400).json({ ok: false, error: 'Name and password are required' })
       return
     }
 
-    const user = await db.collection('users').findOne({ username, password })
+    const user = await db.collection('users').findOne({
+      password,
+      $or: [
+        { username: username.toLowerCase() },
+        { name: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } },
+      ],
+    })
     if (!user) {
       res.status(401).json({ ok: false, error: 'Invalid credentials' })
       return
@@ -143,6 +170,13 @@ app.get('/api/pawn-tickets', async (_req, res) => {
 
 app.post('/api/pawn-tickets', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
     const shopName = typeof req.body?.shopName === 'string' ? req.body.shopName.trim() : ''
     const pawnedDate = Number(req.body?.pawnedDate || Date.now())
     const returnDate = Number(req.body?.returnDate || 0)
@@ -160,7 +194,6 @@ app.post('/api/pawn-tickets', async (req, res) => {
       return
     }
 
-    const db = await getDb()
     const result = await db.collection('pawn_tickets').insertOne({
       shopName,
       pawnedDate,
@@ -187,13 +220,19 @@ app.get('/api/meters', async (_req, res) => {
 
 app.post('/api/meters', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
     const meterNumber = typeof req.body?.meterNumber === 'string' ? req.body.meterNumber.trim() : ''
     if (!name) {
       res.status(400).json({ ok: false, error: 'Meter name is required' })
       return
     }
-    const db = await getDb()
     const result = await db.collection('meters').insertOne({ name, meterNumber, createdAt: Date.now() })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
   } catch (error) {
@@ -226,6 +265,7 @@ app.post('/api/meter-transactions', async (req, res) => {
     const db = await getDb()
     const result = await db.collection('meter_transactions').insertOne({
       meterId,
+      createdByUserId: req.body?.userId || null,
       amount,
       units,
       date,
@@ -249,12 +289,18 @@ app.get('/api/shop-categories', async (_req, res) => {
 
 app.post('/api/shop-categories', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
     if (!name) {
       res.status(400).json({ ok: false, error: 'Category name is required' })
       return
     }
-    const db = await getDb()
     const result = await db.collection('shop_categories').insertOne({ name, createdAt: Date.now() })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
   } catch (error) {
@@ -291,6 +337,7 @@ app.post('/api/shop-items', async (req, res) => {
     const db = await getDb()
     const result = await db.collection('shop_items').insertOne({
       title,
+      createdByUserId: req.body?.userId || null,
       categoryId,
       priority,
       reminderAt,
@@ -343,6 +390,13 @@ app.get('/api/chores', async (_req, res) => {
 
 app.post('/api/chores', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+
     const title = typeof req.body?.title === 'string' ? req.body.title.trim() : ''
     const assignedToUserId = typeof req.body?.assignedToUserId === 'string' ? req.body.assignedToUserId : ''
     const assignedDays = Array.isArray(req.body?.assignedDays)
@@ -352,7 +406,6 @@ app.post('/api/chores', async (req, res) => {
       res.status(400).json({ ok: false, error: 'Title, assignee and at least one day are required' })
       return
     }
-    const db = await getDb()
     const result = await db.collection('chores').insertOne({
       title,
       assignedToUserId,
@@ -373,12 +426,29 @@ app.patch('/api/chores/:id', async (req, res) => {
       res.status(400).json({ ok: false, error: 'Invalid id' })
       return
     }
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!user) {
+      sendForbidden(res)
+      return
+    }
+
+    const chore = await db.collection('chores').findOne({ _id: id })
+    if (!chore) {
+      res.status(404).json({ ok: false, error: 'Chore not found' })
+      return
+    }
+
     const updates = {}
     if (typeof req.body?.completed === 'boolean') updates.completed = req.body.completed
-    if (Array.isArray(req.body?.assignedDays)) {
+    if (Array.isArray(req.body?.assignedDays) && isAdmin(user)) {
       updates.assignedDays = req.body.assignedDays.filter((day) => typeof day === 'string')
     }
-    const db = await getDb()
+    if (!isAdmin(user) && chore.assignedToUserId !== String(user._id)) {
+      sendForbidden(res)
+      return
+    }
+
     await db.collection('chores').updateOne({ _id: id }, { $set: updates })
     res.json({ ok: true })
   } catch (error) {

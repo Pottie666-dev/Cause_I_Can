@@ -14,6 +14,10 @@ import {
 const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'https://ridgeway-mansion-api.onrender.com'
 const allDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+function isAdmin(user) {
+  return user?.role === 'admin'
+}
+
 async function apiFetch(path, options = {}) {
   const response = await fetch(`${apiUrl}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -75,7 +79,7 @@ export default function App() {
 
         <View style={styles.card}>
           <TextInput
-            placeholder="Username (u1/u2/u3/u4)"
+            placeholder="Name or user code (Pottie/u1)"
             value={username}
             onChangeText={setUsername}
             style={styles.input}
@@ -107,12 +111,14 @@ export default function App() {
             <Text style={styles.subtitle}>Welcome {user?.name}</Text>
           </View>
           <View style={styles.grid}>
-            <DashboardTile
-              imageSource={require('./public/PAWNSHIT.jpeg')}
-              icon="🏦"
-              label="Pawn Shit"
-              onPress={() => setScreen('pawn')}
-            />
+            {isAdmin(user) ? (
+              <DashboardTile
+                imageSource={require('./public/PAWNSHIT.jpeg')}
+                icon="🏦"
+                label="Pawn Shit"
+                onPress={() => setScreen('pawn')}
+              />
+            ) : null}
             <DashboardTile icon="⚡" label="Power H20" onPress={() => setScreen('power')} />
             <DashboardTile icon="🛒" label="SHOPList" onPress={() => setScreen('shop')} />
             <DashboardTile icon="📅" label="D & Z" onPress={() => setScreen('chores')} />
@@ -146,16 +152,16 @@ export default function App() {
   }
 
   if (screen === 'pawn') {
-    return <PawnScreen onBack={() => setScreen('dashboard')} />
+    return <PawnScreen user={user} onBack={() => setScreen('dashboard')} />
   }
   if (screen === 'power') {
-    return <PowerScreen onBack={() => setScreen('dashboard')} />
+    return <PowerScreen user={user} onBack={() => setScreen('dashboard')} />
   }
   if (screen === 'shop') {
-    return <ShopScreen onBack={() => setScreen('dashboard')} onUpdatedUrgent={() => void fetchUrgentShopItems()} />
+    return <ShopScreen user={user} onBack={() => setScreen('dashboard')} onUpdatedUrgent={() => void fetchUrgentShopItems()} />
   }
   if (screen === 'chores') {
-    return <ChoresScreen onBack={() => setScreen('dashboard')} />
+    return <ChoresScreen user={user} onBack={() => setScreen('dashboard')} />
   }
 
   return (
@@ -190,7 +196,7 @@ function TopBar({ title, onBack, onRefresh }) {
   )
 }
 
-function PawnScreen({ onBack }) {
+function PawnScreen({ user, onBack }) {
   const [tickets, setTickets] = useState([])
   const [shopName, setShopName] = useState('')
   const [pawnedDate, setPawnedDate] = useState('')
@@ -237,6 +243,7 @@ function PawnScreen({ onBack }) {
       await apiFetch('/api/pawn-tickets', {
         method: 'POST',
         body: JSON.stringify({
+          userId: user?._id,
           shopName: shopName.trim(),
           pawnedDate: pawnedDate ? new Date(pawnedDate).getTime() : Date.now(),
           returnDate: returnDate ? new Date(returnDate).getTime() : null,
@@ -339,7 +346,7 @@ function PawnScreen({ onBack }) {
   )
 }
 
-function PowerScreen({ onBack }) {
+function PowerScreen({ user, onBack }) {
   const [meters, setMeters] = useState([])
   const [transactions, setTransactions] = useState([])
   const [meterName, setMeterName] = useState('')
@@ -374,7 +381,7 @@ function PowerScreen({ onBack }) {
     if (!meterName.trim()) return
     await apiFetch('/api/meters', {
       method: 'POST',
-      body: JSON.stringify({ name: meterName.trim(), meterNumber: meterNumber.trim() }),
+      body: JSON.stringify({ userId: user?._id, name: meterName.trim(), meterNumber: meterNumber.trim() }),
     })
     setMeterName('')
     setMeterNumber('')
@@ -387,6 +394,7 @@ function PowerScreen({ onBack }) {
       method: 'POST',
       body: JSON.stringify({
         meterId: selectedMeterId,
+        userId: user?._id,
         amount: Number(amount || 0),
         units: Number(units || 0),
         date: dateInput ? new Date(dateInput).getTime() : Date.now(),
@@ -404,19 +412,21 @@ function PowerScreen({ onBack }) {
     <SafeAreaView style={styles.container}>
       <TopBar title="Power H20" onBack={onBack} onRefresh={refresh} />
       <ScrollView contentContainerStyle={styles.contentWrap}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Add Meter</Text>
-          <TextInput value={meterName} onChangeText={setMeterName} style={styles.input} placeholder="Meter name" />
-          <TextInput
-            value={meterNumber}
-            onChangeText={setMeterNumber}
-            style={styles.input}
-            placeholder="Meter number (optional)"
-          />
-          <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addMeter()}>
-            <Text style={styles.buttonText}>Add Meter</Text>
-          </TouchableOpacity>
-        </View>
+        {isAdmin(user) ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Add Meter</Text>
+            <TextInput value={meterName} onChangeText={setMeterName} style={styles.input} placeholder="Meter name" />
+            <TextInput
+              value={meterNumber}
+              onChangeText={setMeterNumber}
+              style={styles.input}
+              placeholder="Meter number (optional)"
+            />
+            <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addMeter()}>
+              <Text style={styles.buttonText}>Add Meter</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Record Utility Load</Text>
@@ -464,7 +474,7 @@ function PowerScreen({ onBack }) {
   )
 }
 
-function ShopScreen({ onBack, onUpdatedUrgent }) {
+function ShopScreen({ user, onBack, onUpdatedUrgent }) {
   const [categories, setCategories] = useState([])
   const [items, setItems] = useState([])
   const [categoryName, setCategoryName] = useState('')
@@ -497,7 +507,7 @@ function ShopScreen({ onBack, onUpdatedUrgent }) {
 
   const addCategory = async () => {
     if (!categoryName.trim()) return
-    await apiFetch('/api/shop-categories', { method: 'POST', body: JSON.stringify({ name: categoryName.trim() }) })
+    await apiFetch('/api/shop-categories', { method: 'POST', body: JSON.stringify({ userId: user?._id, name: categoryName.trim() }) })
     setCategoryName('')
     await refresh()
   }
@@ -508,6 +518,7 @@ function ShopScreen({ onBack, onUpdatedUrgent }) {
       method: 'POST',
       body: JSON.stringify({
         title: itemTitle.trim(),
+        userId: user?._id,
         categoryId: selectedCategoryId,
         priority,
         reminderAt: reminderInput ? new Date(reminderInput).getTime() : null,
@@ -531,13 +542,15 @@ function ShopScreen({ onBack, onUpdatedUrgent }) {
     <SafeAreaView style={styles.container}>
       <TopBar title="SHOPList" onBack={onBack} onRefresh={refresh} />
       <ScrollView contentContainerStyle={styles.contentWrap}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Add Category</Text>
-          <TextInput value={categoryName} onChangeText={setCategoryName} style={styles.input} placeholder="Category name" />
-          <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addCategory()}>
-            <Text style={styles.buttonText}>Add Category</Text>
-          </TouchableOpacity>
-        </View>
+        {isAdmin(user) ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Add Category</Text>
+            <TextInput value={categoryName} onChangeText={setCategoryName} style={styles.input} placeholder="Category name" />
+            <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addCategory()}>
+              <Text style={styles.buttonText}>Add Category</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Add Shopping Item</Text>
@@ -634,7 +647,7 @@ function ShopScreen({ onBack, onUpdatedUrgent }) {
   )
 }
 
-function ChoresScreen({ onBack }) {
+function ChoresScreen({ user, onBack }) {
   const [users, setUsers] = useState([])
   const [chores, setChores] = useState([])
   const [title, setTitle] = useState('')
@@ -648,16 +661,16 @@ function ChoresScreen({ onBack }) {
     setError('')
     try {
       const [usersData, choresData] = await Promise.all([apiFetch('/api/users'), apiFetch('/api/chores')])
-      const onlyChildren = usersData.filter((user) => ['Danelle', 'Suzelle'].includes(user.name))
+      const onlyChildren = usersData.filter((candidate) => ['Danelle', 'Suzelle'].includes(candidate.name))
       setUsers(onlyChildren)
-      setChores(choresData)
+      setChores(isAdmin(user) ? choresData : choresData.filter((chore) => chore.assignedToUserId === user?._id))
       if (!assigneeId && onlyChildren[0]) setAssigneeId(onlyChildren[0]._id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed loading chores')
     } finally {
       setLoading(false)
     }
-  }, [assigneeId])
+  }, [assigneeId, user])
 
   useEffect(() => {
     void refresh()
@@ -671,7 +684,7 @@ function ChoresScreen({ onBack }) {
     if (!title.trim() || !assigneeId || selectedDays.length === 0) return
     await apiFetch('/api/chores', {
       method: 'POST',
-      body: JSON.stringify({ title: title.trim(), assignedToUserId: assigneeId, assignedDays: selectedDays }),
+      body: JSON.stringify({ userId: user?._id, title: title.trim(), assignedToUserId: assigneeId, assignedDays: selectedDays }),
     })
     setTitle('')
     setSelectedDays(['Mon'])
@@ -681,7 +694,7 @@ function ChoresScreen({ onBack }) {
   const toggleCompleted = async (chore) => {
     await apiFetch(`/api/chores/${chore._id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ completed: !chore.completed }),
+      body: JSON.stringify({ userId: user?._id, completed: !chore.completed }),
     })
     await refresh()
   }
@@ -693,41 +706,43 @@ function ChoresScreen({ onBack }) {
     <SafeAreaView style={styles.container}>
       <TopBar title="D & Z Chores" onBack={onBack} onRefresh={refresh} />
       <ScrollView contentContainerStyle={styles.contentWrap}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Add Chore</Text>
-          <TextInput value={title} onChangeText={setTitle} style={styles.input} placeholder="Chore title" />
-          <View style={styles.row}>
-            {users.map((user) => (
-              <TouchableOpacity
-                key={user._id}
-                style={[styles.chip, assigneeId === user._id ? styles.chipActive : null]}
-                onPress={() => setAssigneeId(user._id)}
-              >
-                <Text style={assigneeId === user._id ? styles.chipTextActive : styles.chipText}>{user.name}</Text>
+        {isAdmin(user) ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Add Chore</Text>
+            <TextInput value={title} onChangeText={setTitle} style={styles.input} placeholder="Chore title" />
+            <View style={styles.row}>
+              {users.map((candidate) => (
+                <TouchableOpacity
+                  key={candidate._id}
+                  style={[styles.chip, assigneeId === candidate._id ? styles.chipActive : null]}
+                  onPress={() => setAssigneeId(candidate._id)}
+                >
+                  <Text style={assigneeId === candidate._id ? styles.chipTextActive : styles.chipText}>{candidate.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
+              {allDays.map((day) => (
+                <TouchableOpacity
+                  key={day}
+                  style={[styles.chip, selectedDays.includes(day) ? styles.chipActive : null]}
+                  onPress={() => toggleDay(day)}
+                >
+                  <Text style={selectedDays.includes(day) ? styles.chipTextActive : styles.chipText}>{day}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.row}>
+              <TouchableOpacity style={styles.buttonSecondary} onPress={() => setSelectedDays([...allDays])}>
+                <Text style={styles.buttonText}>Whole Week</Text>
               </TouchableOpacity>
-            ))}
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
-            {allDays.map((day) => (
-              <TouchableOpacity
-                key={day}
-                style={[styles.chip, selectedDays.includes(day) ? styles.chipActive : null]}
-                onPress={() => toggleDay(day)}
-              >
-                <Text style={selectedDays.includes(day) ? styles.chipTextActive : styles.chipText}>{day}</Text>
+              <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addChore()}>
+                <Text style={styles.buttonText}>Add Chore</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-          <View style={styles.row}>
-            <TouchableOpacity style={styles.buttonSecondary} onPress={() => setSelectedDays([...allDays])}>
-              <Text style={styles.buttonText}>Whole Week</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addChore()}>
-              <Text style={styles.buttonText}>Add Chore</Text>
-            </TouchableOpacity>
+            </View>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
           </View>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-        </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Weekly Calendar</Text>
@@ -870,73 +885,4 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   dayTitle: { fontSize: 14, fontWeight: '800', color: '#111827', paddingTop: 8 },
-})
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Items</Text>
-        {loading ? <ActivityIndicator size="small" color="#4f46e5" /> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <FlatList
-          data={items}
-          keyExtractor={(item) => item._id}
-          renderItem={({ item }) => (
-            <View style={styles.itemRow}>
-              <Text style={styles.itemText}>{item.title}</Text>
-              <Text style={styles.itemMeta}>{new Date(item.createdAt).toLocaleString()}</Text>
-            </View>
-          )}
-          ListEmptyComponent={!loading ? <Text style={styles.empty}>No items yet.</Text> : null}
-        />
-      </View>
-    </SafeAreaView>
-  )
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc', padding: 16, gap: 12 },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderColor: '#e2e8f0',
-    borderWidth: 1,
-    padding: 12,
-  },
-  title: { fontSize: 24, fontWeight: '800', color: '#111827' },
-  subtitle: { fontSize: 14, color: '#475569', marginTop: 4 },
-  meta: { fontSize: 12, color: '#64748b', marginTop: 8 },
-  input: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#ffffff',
-  },
-  row: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  buttonPrimary: {
-    flex: 1,
-    backgroundColor: '#4f46e5',
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  buttonSecondary: {
-    flex: 1,
-    backgroundColor: '#0f172a',
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  buttonText: { color: '#ffffff', fontWeight: '700' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 10 },
-  itemRow: {
-    borderTopColor: '#e2e8f0',
-    borderTopWidth: 1,
-    paddingVertical: 10,
-  },
-  itemText: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  itemMeta: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  empty: { color: '#64748b', fontSize: 13 },
-  error: { color: '#b91c1c', marginBottom: 8 },
 })
