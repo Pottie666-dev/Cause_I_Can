@@ -593,12 +593,17 @@ app.patch('/api/meter-transactions/:id', async (req, res) => {
 
 app.delete('/api/meter-transactions/:id', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
     const id = toId(req.params.id)
     if (!id) {
       res.status(400).json({ ok: false, error: 'Invalid id' })
       return
     }
-    const db = await getDb()
     const result = await db.collection('meter_transactions').deleteOne({ _id: id })
     if (result.deletedCount === 0) {
       res.status(404).json({ ok: false, error: 'Transaction not found' })
@@ -650,6 +655,10 @@ app.get('/api/shop-items', async (_req, res) => {
         ...serializeId(item),
         priority: item.priority || 'yellow',
         reminderAt: item.reminderAt ?? null,
+        quantity:
+          item.quantity !== undefined && item.quantity !== null && item.quantity !== ''
+            ? Number(item.quantity)
+            : null,
       })),
     )
   } catch (error) {
@@ -663,6 +672,11 @@ app.post('/api/shop-items', async (req, res) => {
     const categoryId = typeof req.body?.categoryId === 'string' ? req.body.categoryId : ''
     const priority = ['green', 'yellow', 'red'].includes(req.body?.priority) ? req.body.priority : 'yellow'
     const reminderAt = req.body?.reminderAt ? Number(req.body.reminderAt) : null
+    let quantity = null
+    if (req.body?.quantity !== undefined && req.body?.quantity !== null && req.body?.quantity !== '') {
+      const q = Number(req.body.quantity)
+      if (Number.isFinite(q) && q >= 0) quantity = q
+    }
     if (!title || !categoryId) {
       res.status(400).json({ ok: false, error: 'Title and category are required' })
       return
@@ -674,6 +688,7 @@ app.post('/api/shop-items', async (req, res) => {
       categoryId,
       priority,
       reminderAt,
+      quantity,
       purchased: false,
       createdAt: Date.now(),
     })
@@ -685,20 +700,59 @@ app.post('/api/shop-items', async (req, res) => {
 
 app.patch('/api/shop-items/:id', async (req, res) => {
   try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
     const id = toId(req.params.id)
     if (!id) {
       res.status(400).json({ ok: false, error: 'Invalid id' })
       return
     }
+    const existing = await db.collection('shop_items').findOne({ _id: id })
+    if (!existing) {
+      res.status(404).json({ ok: false, error: 'Item not found' })
+      return
+    }
+
     const updates = {}
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, 'purchased')) {
+      if (!isAdmin(user)) {
+        sendForbidden(res)
+        return
+      }
+      updates.purchased = Boolean(req.body.purchased)
+    }
+    if (typeof req.body?.title === 'string' && req.body.title.trim()) {
+      updates.title = req.body.title.trim()
+    }
+    if (typeof req.body?.categoryId === 'string') {
+      const cid = toId(req.body.categoryId)
+      if (!cid) {
+        res.status(400).json({ ok: false, error: 'Invalid category id' })
+        return
+      }
+      updates.categoryId = String(req.body.categoryId)
+    }
     if (typeof req.body?.priority === 'string' && ['green', 'yellow', 'red'].includes(req.body.priority)) {
       updates.priority = req.body.priority
     }
-    if (typeof req.body?.purchased === 'boolean') updates.purchased = req.body.purchased
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, 'reminderAt')) {
       updates.reminderAt = req.body.reminderAt ? Number(req.body.reminderAt) : null
     }
-    const db = await getDb()
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, 'quantity')) {
+      const raw = req.body.quantity
+      if (raw === null || raw === '') {
+        updates.quantity = null
+      } else {
+        const q = Number(raw)
+        updates.quantity = Number.isFinite(q) && q >= 0 ? q : null
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ ok: false, error: 'No valid updates' })
+      return
+    }
+
     await db.collection('shop_items').updateOne({ _id: id }, { $set: updates })
     res.json({ ok: true })
   } catch (error) {
@@ -706,14 +760,47 @@ app.patch('/api/shop-items/:id', async (req, res) => {
   }
 })
 
-app.get('/api/chores', async (_req, res) => {
+app.delete('/api/shop-items/:id', async (req, res) => {
   try {
     const db = await getDb()
-    const chores = await db.collection('chores').find({}).sort({ createdAt: -1 }).toArray()
+    const user = await getRequestUser(db, req)
+    if (!isAdmin(user)) {
+      sendForbidden(res)
+      return
+    }
+    const id = toId(req.params.id)
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'Invalid id' })
+      return
+    }
+    const result = await db.collection('shop_items').deleteOne({ _id: id })
+    if (result.deletedCount === 0) {
+      res.status(404).json({ ok: false, error: 'Item not found' })
+      return
+    }
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' })
+  }
+})
+
+app.get('/api/chores', async (req, res) => {
+  try {
+    const db = await getDb()
+    const user = await getRequestUser(db, req)
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required (pass userId)' })
+      return
+    }
+
+    const filter = isAdmin(user) ? {} : { assignedToUserId: String(user._id) }
+    const chores = await db.collection('chores').find(filter).sort({ createdAt: -1 }).toArray()
     res.json(
       chores.map((chore) => ({
         ...serializeId(chore),
         assignedDays: Array.isArray(chore.assignedDays) ? chore.assignedDays : [],
+        completed: Boolean(chore.completed),
+        adminVerified: Boolean(chore.adminVerified),
       })),
     )
   } catch (error) {
@@ -744,6 +831,7 @@ app.post('/api/chores', async (req, res) => {
       assignedToUserId,
       assignedDays,
       completed: false,
+      adminVerified: false,
       createdAt: Date.now(),
     })
     res.status(201).json({ ok: true, _id: String(result.insertedId) })
@@ -773,12 +861,34 @@ app.patch('/api/chores/:id', async (req, res) => {
     }
 
     const updates = {}
-    if (typeof req.body?.completed === 'boolean') updates.completed = req.body.completed
+
+    if (typeof req.body?.adminVerified === 'boolean') {
+      if (!isAdmin(user)) {
+        sendForbidden(res)
+        return
+      }
+      updates.adminVerified = req.body.adminVerified
+    }
+
+    if (typeof req.body?.completed === 'boolean') {
+      if (!isAdmin(user) && chore.assignedToUserId !== String(user._id)) {
+        sendForbidden(res)
+        return
+      }
+      updates.completed = req.body.completed
+    }
+
     if (Array.isArray(req.body?.assignedDays) && isAdmin(user)) {
       updates.assignedDays = req.body.assignedDays.filter((day) => typeof day === 'string')
     }
+
     if (!isAdmin(user) && chore.assignedToUserId !== String(user._id)) {
       sendForbidden(res)
+      return
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ ok: false, error: 'Nothing to update' })
       return
     }
 

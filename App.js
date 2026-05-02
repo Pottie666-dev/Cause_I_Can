@@ -32,6 +32,11 @@ function endOfDayDate(d) {
   return t
 }
 
+function startOfCurrentMonth(d = new Date()) {
+  const t = new Date(d)
+  return startOfDay(new Date(t.getFullYear(), t.getMonth(), 1))
+}
+
 function addCalendarDays(d, n) {
   const t = startOfDay(d)
   t.setDate(t.getDate() + n)
@@ -86,6 +91,21 @@ function meterTypeIcon(value) {
 }
 
 const HIDDEN_METER_IDS_KEY = 'ridgeway_power_hidden_meter_ids'
+const SESSION_USER_KEY = 'ridgeway_session_user'
+
+async function persistSessionUser(user) {
+  if (user && typeof user._id === 'string') {
+    await AsyncStorage.setItem(SESSION_USER_KEY, JSON.stringify(user))
+  }
+}
+
+async function clearSessionUser() {
+  try {
+    await AsyncStorage.removeItem(SESSION_USER_KEY)
+  } catch {
+    /* Web / storage quirks — callers still clear session in React state */
+  }
+}
 
 async function loadHiddenMeterIds() {
   try {
@@ -122,6 +142,211 @@ function isAdmin(user) {
   return user?.role === 'admin'
 }
 
+/** Checkers Hyper–inspired palette (dashboard, shop, chores, login) */
+const CHECKERS = {
+  teal: '#3C8D8B',
+  tealDark: '#2f706e',
+  lime: '#A5D64B',
+  limeMuted: '#ecf8d4',
+  bg: '#F4F6F7',
+  card: '#ffffff',
+  text: '#1a3332',
+  textMuted: '#5c7a79',
+}
+
+/** Shop item urgency (stored as red / yellow / green on the server). */
+const SHOP_PRIORITY_KEYS = ['red', 'yellow', 'green']
+const SHOP_PRIORITY_LABEL = { red: 'Today', yellow: 'Tomorrow', green: 'Whenever' }
+
+function shopPriorityLabel(p) {
+  return SHOP_PRIORITY_LABEL[p] ?? p ?? ''
+}
+
+/** All red-priority (“Today”) items not yet bought — any category */
+function importantShopItemsForDashboard(items) {
+  return items
+    .filter((item) => item.priority === 'red' && !item.purchased)
+    .sort((a, b) => Number(a.reminderAt || 0) - Number(b.reminderAt || 0))
+}
+
+/** Open pawn tickets with return date in the next `days` days (from today’s midnight). */
+function pawnTicketsDueWithinDays(tickets, days) {
+  const start = startOfDay(new Date()).getTime()
+  const end = start + days * 24 * 60 * 60 * 1000
+  return tickets
+    .filter((t) => {
+      const st = t.status || 'open'
+      if (st !== 'open') return false
+      const ret = Number(t.returnDate || 0)
+      return ret >= start && ret < end
+    })
+    .sort((a, b) => Number(a.returnDate || 0) - Number(b.returnDate || 0))
+}
+
+const shopDashboardStyles = StyleSheet.create({
+  dashboardTile: {
+    borderWidth: 2,
+    borderColor: CHECKERS.teal,
+    backgroundColor: '#e6f3f2',
+  },
+  dashboardIconRing: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 3,
+    borderColor: CHECKERS.teal,
+    backgroundColor: CHECKERS.limeMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  dashboardIcon: { marginBottom: 0, fontSize: 28, color: CHECKERS.tealDark },
+  dashboardTileLabel: { color: CHECKERS.tealDark, fontWeight: '800' },
+})
+
+/** South African flag palette + bright accents (textiles / rainbow energy) */
+const SA = {
+  red: '#E03C31',
+  blue: '#002395',
+  green: '#007749',
+  yellow: '#FFB81C',
+  /** Ring border — darker gold, like Power/Shop icon circles */
+  darkYellow: '#C99403',
+  /** Dashboard tile fill — soft yellow behind flag stripe + label */
+  lightYellow: '#FFF9E6',
+  black: '#1a1a1a',
+  white: '#FFFFFF',
+  cream: '#FFF8F0',
+}
+const SA_FLAG_STRIPES = [SA.red, SA.blue, SA.green, SA.yellow, SA.black, '#F5F0E8']
+
+/** Cycle through flag colours for each letter (readable on light yellow / blue bar). */
+const SA_FLAG_LABEL_COLORS = [SA.red, SA.blue, SA.green, SA.yellow, SA.black]
+
+function SweepSussieFlagText({ text, style }) {
+  const s = typeof text === 'string' ? text : ''
+  return (
+    <Text style={style}>
+      {s.split('').map((ch, i) => (
+        <Text key={`sf-${i}`} style={{ color: SA_FLAG_LABEL_COLORS[i % SA_FLAG_LABEL_COLORS.length] }}>
+          {ch}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+/** Dashboard “Important” / pawn collections — soft red text */
+const DASH_SOFT_RED = {
+  title: '#c45a5a',
+  body: '#b86868',
+  meta: '#a96f6f',
+}
+
+const sweepSussieStyles = StyleSheet.create({
+  screen: {
+    backgroundColor: SA.cream,
+  },
+  screenStripeBar: {
+    flexDirection: 'row',
+    height: 5,
+    width: '100%',
+  },
+  screenStripeSeg: { flex: 1, height: '100%' },
+  card: {
+    borderColor: SA.blue,
+    borderLeftWidth: 4,
+    borderLeftColor: SA.green,
+  },
+  dashboardTile: {
+    borderWidth: 2,
+    borderColor: SA.yellow,
+    backgroundColor: SA.lightYellow,
+    overflow: 'hidden',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    justifyContent: 'flex-start',
+  },
+  dashboardStripeTop: {
+    flexDirection: 'row',
+    height: 6,
+    width: '100%',
+  },
+  dashboardStripeSeg: { flex: 1, height: '100%' },
+  dashboardTileInner: {
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingTop: 12,
+    paddingBottom: 14,
+    width: '100%',
+  },
+  /** Circular ring like Power / Shop tiles: dark yellow border, soft fill. */
+  dashboardIconRing: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 3,
+    borderColor: SA.darkYellow,
+    backgroundColor: SA.lightYellow,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  dashboardIcon: {
+    fontSize: 34,
+    marginBottom: 0,
+  },
+  dashboardTileLabel: {
+    fontWeight: '900',
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 16,
+    textShadowColor: 'rgba(0, 35, 125, 0.12)',
+    textShadowOffset: { width: 0.5, height: 0.5 },
+    textShadowRadius: 3,
+  },
+  topBar: {
+    backgroundColor: SA.blue,
+    borderBottomWidth: 4,
+    borderBottomColor: SA.green,
+  },
+  topBarTitle: {
+    color: SA.white,
+    fontWeight: '900',
+    fontSize: 17,
+    textShadowColor: SA.red,
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  topBarLink: {
+    color: SA.yellow,
+    fontWeight: '800',
+  },
+  sectionTitle: {
+    color: SA.blue,
+    fontWeight: '800',
+  },
+  daySection: {
+    borderLeftWidth: 5,
+    borderLeftColor: SA.red,
+    backgroundColor: SA.white,
+  },
+  dayTitle: {
+    color: SA.green,
+    fontWeight: '900',
+  },
+  chipSelected: {
+    borderWidth: 2,
+    borderColor: SA.yellow,
+    backgroundColor: '#FFF9E6',
+  },
+  chipTextSelected: {
+    color: SA.blue,
+    fontWeight: '800',
+  },
+})
+
 async function apiFetch(path, options = {}) {
   const response = await fetch(`${apiUrl}${path}`, {
     headers: {
@@ -156,22 +381,82 @@ async function apiFetch(path, options = {}) {
 }
 
 export default function App() {
+  const [sessionReady, setSessionReady] = useState(false)
   const [screen, setScreen] = useState('login')
   const [user, setUser] = useState(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [urgentShopItems, setUrgentShopItems] = useState([])
+  const [importantShopItems, setImportantShopItems] = useState([])
+  const [duePawnTickets, setDuePawnTickets] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const headerText = useMemo(() => `API: ${apiUrl}`, [])
-
-  const fetchUrgentShopItems = useCallback(async () => {
+  const fetchDashboardLists = useCallback(async () => {
     try {
-      const shopItems = await apiFetch('/api/shop-items')
-      setUrgentShopItems(shopItems.filter((item) => item.priority === 'red' && !item.purchased).slice(0, 5))
+      const [shopItems, categories, tickets] = await Promise.all([
+        apiFetch('/api/shop-items'),
+        apiFetch('/api/shop-categories'),
+        apiFetch('/api/pawn-tickets'),
+      ])
+      setImportantShopItems(importantShopItemsForDashboard(shopItems))
+      setDuePawnTickets(pawnTicketsDueWithinDays(tickets, 7))
     } catch (_err) {
-      setUrgentShopItems([])
+      setImportantShopItems([])
+      setDuePawnTickets([])
+    }
+  }, [])
+
+  /** Stable ref — inline lambdas here caused ShopScreen refresh loop + flickering loaders */
+  const onShopDashboardSync = useCallback(() => {
+    void fetchDashboardLists()
+  }, [fetchDashboardLists])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SESSION_USER_KEY)
+        if (raw && !cancelled) {
+          const parsed = JSON.parse(raw)
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            typeof parsed._id === 'string' &&
+            typeof parsed.name === 'string'
+          ) {
+            setUser({
+              _id: parsed._id,
+              username: typeof parsed.username === 'string' ? parsed.username : '',
+              name: parsed.name,
+              role: parsed.role === 'admin' || parsed.role === 'member' ? parsed.role : 'member',
+            })
+            setScreen('dashboard')
+            try {
+              const [shopItems, categories, tickets] = await Promise.all([
+                apiFetch('/api/shop-items'),
+                apiFetch('/api/shop-categories'),
+                apiFetch('/api/pawn-tickets'),
+              ])
+              if (!cancelled) {
+                setImportantShopItems(importantShopItemsForDashboard(shopItems))
+                setDuePawnTickets(pawnTicketsDueWithinDays(tickets, 7))
+              }
+            } catch {
+              if (!cancelled) {
+                setImportantShopItems([])
+                setDuePawnTickets([])
+              }
+            }
+          }
+        }
+      } catch {
+        await AsyncStorage.removeItem(SESSION_USER_KEY)
+      } finally {
+        if (!cancelled) setSessionReady(true)
+      }
+    })()
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -184,14 +469,34 @@ export default function App() {
         body: JSON.stringify({ username: username.trim(), password }),
       })
       setUser(data.user)
+      await persistSessionUser(data.user)
       setScreen('dashboard')
-      await fetchUrgentShopItems()
+      await fetchDashboardLists()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setLoading(false)
     }
-  }, [fetchUrgentShopItems, password, username])
+  }, [fetchDashboardLists, password, username])
+
+  const doLogout = useCallback(async () => {
+    await clearSessionUser()
+    setUser(null)
+    setScreen('login')
+    setPassword('')
+    setUsername('')
+    setError('')
+  }, [])
+
+  if (!sessionReady) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={[styles.card, { margin: 16, alignItems: 'center', paddingVertical: 48 }]}>
+          <ActivityIndicator size="large" color={CHECKERS.teal} />
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   if (screen === 'login') {
     return (
@@ -206,15 +511,15 @@ export default function App() {
             keyboardDismissMode="on-drag"
             contentContainerStyle={styles.loginScrollContent}
           >
-            <View style={styles.card}>
-              <Text style={styles.title}>Ridgeway-Mansion</Text>
-              <Text style={styles.subtitle}>Login to open your dashboard</Text>
-              <Text style={styles.meta}>{headerText}</Text>
-            </View>
-
-            <View style={styles.card}>
+            <Image
+              source={require('./public/ridgewayView.jpeg')}
+              style={styles.loginHeroImage}
+              resizeMode="cover"
+              accessibilityLabel="Ridgeway Mansion"
+            />
+            <View style={styles.loginFormBlock}>
               <TextInput
-                placeholder="Name or user code (Pottie/u1)"
+                placeholder="Name"
                 value={username}
                 onChangeText={setUsername}
                 style={styles.input}
@@ -227,11 +532,11 @@ export default function App() {
                 style={styles.input}
                 secureTextEntry
               />
-              <TouchableOpacity style={styles.buttonPrimary} onPress={() => void doLogin()}>
+              <TouchableOpacity style={styles.loginPrimaryBtn} onPress={() => void doLogin()}>
                 <Text style={styles.buttonText}>Login</Text>
               </TouchableOpacity>
-              {loading ? <ActivityIndicator size="small" color="#4f46e5" style={styles.marginTop8} /> : null}
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+              {loading ? <ActivityIndicator size="small" color={CHECKERS.teal} style={styles.marginTop8} /> : null}
+              {error ? <Text style={[styles.error, styles.loginErrorCenter]}>{error}</Text> : null}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -242,10 +547,21 @@ export default function App() {
   if (screen === 'dashboard') {
     return (
       <SafeAreaView style={styles.container}>
+        <View style={styles.dashboardTopBar}>
+          <Pressable
+            onPress={() => void doLogout()}
+            style={({ pressed }) => [styles.dashboardLogoutBtn, pressed && styles.dashboardLogoutPressed]}
+            accessibilityLabel="Log out"
+            accessibilityRole="button"
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+          >
+            <Text style={styles.dashboardLogoutText}>Logout</Text>
+          </Pressable>
+        </View>
         <ScrollView contentContainerStyle={styles.contentWrap}>
-          <View style={styles.card}>
-            <Text style={styles.title}>Dashboard</Text>
-            <Text style={styles.subtitle}>Welcome {user?.name}</Text>
+          <View style={[styles.card, styles.dashboardHeaderCard]}>
+            <Text style={styles.dashboardTitle}>Ridgeway Mansion</Text>
+            <Text style={styles.dashboardSubtitle}>Welcome {user?.name}</Text>
           </View>
           <View style={styles.grid}>
             {isAdmin(user) ? (
@@ -253,36 +569,45 @@ export default function App() {
                 imageSource={require('./public/PAWNSHIT.jpeg')}
                 icon="🏦"
                 label="Pawn Shit"
+                variant="pawn"
                 onPress={() => setScreen('pawn')}
               />
             ) : null}
             <DashboardTile icon="⚡" label="Power H20" variant="power" onPress={() => setScreen('power')} />
-            <DashboardTile icon="🛒" label="SHOPList" onPress={() => setScreen('shop')} />
-            <DashboardTile icon="📅" label="D & Z" onPress={() => setScreen('chores')} />
+            <DashboardTile icon="🛒" label="SMOKES & SWEETS" variant="shop" onPress={() => setScreen('shop')} />
+            <DashboardTile icon="🧹" label="Sweep Sussie" variant="chores" onPress={() => setScreen('chores')} />
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Most Important SHOPList Items</Text>
-            {urgentShopItems.length === 0 ? <Text style={styles.empty}>No red-priority items right now.</Text> : null}
-            {urgentShopItems.map((item) => (
+            <Text style={[styles.sectionTitle, styles.dashboardUrgentTitle]}>Important · Today</Text>
+            {importantShopItems.length === 0 ? (
+              <Text style={[styles.empty, styles.dashboardUrgentMeta]}>Nothing marked for today.</Text>
+            ) : null}
+            {importantShopItems.map((item) => (
               <View key={item._id} style={styles.itemRow}>
-                <Text style={styles.itemText}>🔴 {item.title}</Text>
-                <Text style={styles.itemMeta}>
-                  {item.reminderAt ? `Reminder: ${new Date(item.reminderAt).toLocaleString()}` : 'No reminder set'}
+                <Text style={[styles.itemText, styles.dashboardUrgentBody]}>🔴 {item.title}</Text>
+                <Text style={[styles.itemMeta, styles.dashboardUrgentMeta]}>
+                  {item.reminderAt ? `Reminder: ${formatPowerDate(new Date(item.reminderAt))}` : 'No reminder set'}
                 </Text>
               </View>
             ))}
           </View>
-          <TouchableOpacity
-            style={styles.buttonSecondary}
-            onPress={() => {
-              setUser(null)
-              setScreen('login')
-              setPassword('')
-            }}
-          >
-            <Text style={styles.buttonText}>Logout</Text>
-          </TouchableOpacity>
+
+          <View style={styles.card}>
+            <Text style={[styles.sectionTitle, styles.dashboardUrgentTitle]}>Collections due · next 7 days</Text>
+            {duePawnTickets.length === 0 ? (
+              <Text style={[styles.empty, styles.dashboardUrgentMeta]}>No open tickets due in the next week.</Text>
+            ) : null}
+            {duePawnTickets.map((ticket) => (
+              <View key={ticket._id} style={styles.itemRow}>
+                <Text style={[styles.itemText, styles.dashboardUrgentBody]}>{ticket.shopName || 'Shop'}</Text>
+                <Text style={[styles.itemMeta, styles.dashboardUrgentMeta]}>
+                  Return by {ticket.returnDate ? formatPowerDate(new Date(ticket.returnDate)) : '—'} · R{' '}
+                  {Number(ticket.totalRepayAmount || 0).toFixed(2)}
+                </Text>
+              </View>
+            ))}
+          </View>
         </ScrollView>
       </SafeAreaView>
     )
@@ -295,7 +620,7 @@ export default function App() {
     return <PowerScreen user={user} onBack={() => setScreen('dashboard')} />
   }
   if (screen === 'shop') {
-    return <ShopScreen user={user} onBack={() => setScreen('dashboard')} onUpdatedUrgent={() => void fetchUrgentShopItems()} />
+    return <ShopScreen user={user} onBack={() => setScreen('dashboard')} onUpdatedUrgent={onShopDashboardSync} />
   }
   if (screen === 'chores') {
     return <ChoresScreen user={user} onBack={() => setScreen('dashboard')} />
@@ -312,18 +637,66 @@ export default function App() {
 
 function DashboardTile({ icon, label, imageSource, variant, onPress }) {
   const isPower = variant === 'power'
+  const isPawn = variant === 'pawn'
+  const isShop = variant === 'shop'
+  const isChores = variant === 'chores'
+  const tileStyles = [
+    styles.tile,
+    isPower && powerStyles.dashboardTile,
+    isPawn && pawnStyles.dashboardTile,
+    isShop && shopDashboardStyles.dashboardTile,
+    isChores && sweepSussieStyles.dashboardTile,
+  ]
+  const labelStyles = [
+    styles.tileLabel,
+    isPower && powerStyles.dashboardTileLabel,
+    isPawn && pawnStyles.dashboardTileLabel,
+    isShop && shopDashboardStyles.dashboardTileLabel,
+    isChores && sweepSussieStyles.dashboardTileLabel,
+  ]
   return (
-    <TouchableOpacity style={[styles.tile, isPower && powerStyles.dashboardTile]} onPress={onPress}>
-      {imageSource ? (
-        <Image source={imageSource} style={styles.tileImage} resizeMode="cover" />
+    <TouchableOpacity style={tileStyles} onPress={onPress}>
+      {isChores ? (
+        <>
+          <View style={sweepSussieStyles.dashboardStripeTop}>
+            {SA_FLAG_STRIPES.map((color, i) => (
+              <View key={`sa-${i}`} style={[sweepSussieStyles.dashboardStripeSeg, { backgroundColor: color }]} />
+            ))}
+          </View>
+          <View style={sweepSussieStyles.dashboardTileInner}>
+            <View style={sweepSussieStyles.dashboardIconRing}>
+              <Text style={[styles.tileIcon, sweepSussieStyles.dashboardIcon]}>{icon}</Text>
+            </View>
+            <SweepSussieFlagText text={label} style={labelStyles} />
+          </View>
+        </>
+      ) : imageSource ? (
+        <>
+          <View style={pawnStyles.dashboardIconRing}>
+            <Image source={imageSource} style={pawnStyles.dashboardTileImage} resizeMode="cover" />
+          </View>
+          <Text style={labelStyles}>{label}</Text>
+        </>
       ) : isPower ? (
-        <View style={powerStyles.dashboardIconRing}>
-          <Text style={[styles.tileIcon, powerStyles.dashboardIcon]}>{icon}</Text>
-        </View>
+        <>
+          <View style={powerStyles.dashboardIconRing}>
+            <Text style={[styles.tileIcon, powerStyles.dashboardIcon]}>{icon}</Text>
+          </View>
+          <Text style={labelStyles}>{label}</Text>
+        </>
+      ) : isShop ? (
+        <>
+          <View style={shopDashboardStyles.dashboardIconRing}>
+            <Text style={[styles.tileIcon, shopDashboardStyles.dashboardIcon]}>{icon}</Text>
+          </View>
+          <Text style={labelStyles}>{label}</Text>
+        </>
       ) : (
-        <Text style={styles.tileIcon}>{icon}</Text>
+        <>
+          <Text style={styles.tileIcon}>{icon}</Text>
+          <Text style={labelStyles}>{label}</Text>
+        </>
       )}
-      <Text style={[styles.tileLabel, isPower && powerStyles.dashboardTileLabel]}>{label}</Text>
     </TouchableOpacity>
   )
 }
@@ -331,14 +704,28 @@ function DashboardTile({ icon, label, imageSource, variant, onPress }) {
 function TopBar({ title, onBack, onRefresh, variant }) {
   const pawn = variant === 'pawn'
   const power = variant === 'power'
+  const chores = variant === 'chores'
+  const titleStyles = [styles.topTitle, pawn && pawnStyles.topBarTitle, power && powerStyles.topBarTitle, chores && sweepSussieStyles.topBarTitle]
   return (
-    <View style={[styles.topBar, pawn && pawnStyles.topBar, power && powerStyles.topBar]}>
+    <View style={[styles.topBar, pawn && pawnStyles.topBar, power && powerStyles.topBar, chores && sweepSussieStyles.topBar]}>
       <TouchableOpacity style={styles.topButton} onPress={onBack}>
-        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink]}>Back</Text>
+        <Text
+          style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink, chores && sweepSussieStyles.topBarLink]}
+        >
+          Back
+        </Text>
       </TouchableOpacity>
-      <Text style={[styles.topTitle, pawn && pawnStyles.topBarTitle, power && powerStyles.topBarTitle]}>{title}</Text>
+      {chores ? (
+        <SweepSussieFlagText text={title} style={titleStyles} />
+      ) : (
+        <Text style={titleStyles}>{title}</Text>
+      )}
       <TouchableOpacity style={styles.topButton} onPress={() => void onRefresh()}>
-        <Text style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink]}>Refresh</Text>
+        <Text
+          style={[styles.topButtonText, pawn && pawnStyles.topBarLink, power && powerStyles.topBarLink, chores && sweepSussieStyles.topBarLink]}
+        >
+          Refresh
+        </Text>
       </TouchableOpacity>
     </View>
   )
@@ -1134,12 +1521,9 @@ function PowerScreen({ user, onBack }) {
   const [loadDate, setLoadDate] = useState(() => startOfDay(new Date()))
   const [randomReading, setRandomReading] = useState('')
   const [snapshotDate, setSnapshotDate] = useState(() => startOfDay(new Date()))
-  const [statsStartDate, setStatsStartDate] = useState(() => {
-    const d = new Date()
-    d.setDate(d.getDate() - 30)
-    return startOfDay(d)
-  })
+  const [statsStartDate, setStatsStartDate] = useState(() => startOfCurrentMonth())
   const [statsEndDate, setStatsEndDate] = useState(() => startOfDay(new Date()))
+  const [statsMeterScope, setStatsMeterScope] = useState('both')
   const [powerPickerTarget, setPowerPickerTarget] = useState(null)
   const [editDraft, setEditDraft] = useState(null)
   const [savingLoad, setSavingLoad] = useState(false)
@@ -1148,6 +1532,7 @@ function PowerScreen({ user, onBack }) {
   const submitLock = useRef(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const isPowerAdmin = isAdmin(user)
 
   const hydrateHidden = useCallback(async () => {
     const s = await loadHiddenMeterIds()
@@ -1183,6 +1568,12 @@ function PowerScreen({ user, onBack }) {
   const powerMeters = useMemo(() => visibleMeters.filter((m) => meterTypeFor(m) === 'power'), [visibleMeters])
   const waterMeters = useMemo(() => visibleMeters.filter((m) => meterTypeFor(m) === 'water'), [visibleMeters])
 
+  const metersForStats = useMemo(() => {
+    if (statsMeterScope === 'power') return powerMeters
+    if (statsMeterScope === 'water') return waterMeters
+    return visibleMeters
+  }, [statsMeterScope, powerMeters, waterMeters, visibleMeters])
+
   useEffect(() => {
     if (!selectedMeterId && visibleMeters[0]) setSelectedMeterId(visibleMeters[0]._id)
     if (selectedMeterId && !visibleMeters.some((m) => m._id === selectedMeterId)) {
@@ -1191,6 +1582,10 @@ function PowerScreen({ user, onBack }) {
   }, [visibleMeters, selectedMeterId])
 
   const hideMeter = (meter) => {
+    if (!isPowerAdmin) {
+      Alert.alert('Permission', 'Only admins can hide meters.')
+      return
+    }
     Alert.alert('Hide meter?', `“${meter.name}” will be hidden from lists and stats. You can restore hidden meters below.`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -1210,6 +1605,10 @@ function PowerScreen({ user, onBack }) {
   }
 
   const restoreMeter = (meterId) => {
+    if (!isPowerAdmin) {
+      Alert.alert('Permission', 'Only admins can restore hidden meters.')
+      return
+    }
     void (async () => {
       const next = new Set(hiddenMeterIds)
       next.delete(String(meterId))
@@ -1433,6 +1832,10 @@ function PowerScreen({ user, onBack }) {
   }
 
   const confirmDeleteTransaction = (transaction) => {
+    if (!isPowerAdmin) {
+      Alert.alert('Permission', 'Only admins can delete transactions.')
+      return
+    }
     Alert.alert('Delete transaction?', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -1458,15 +1861,20 @@ function PowerScreen({ user, onBack }) {
 
   const onTransactionLongPress = (transaction) => {
     const m = meterLookup[transaction.meterId]
-    Alert.alert('Transaction', `${m?.name || 'Meter'} · ${new Date(transaction.date || Date.now()).toLocaleDateString()}`, [
-      { text: 'Edit', onPress: () => openEditTransaction(transaction) },
-      {
+    const buttons = [{ text: 'Edit', onPress: () => openEditTransaction(transaction) }]
+    if (isPowerAdmin) {
+      buttons.push({
         text: 'Delete',
         style: 'destructive',
         onPress: () => confirmDeleteTransaction(transaction),
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ])
+      })
+    }
+    buttons.push({ text: 'Cancel', style: 'cancel' })
+    Alert.alert(
+      'Transaction',
+      `${m?.name || 'Meter'} · ${new Date(transaction.date || Date.now()).toLocaleDateString()}`,
+      buttons,
+    )
   }
 
   const applyPowerPickerDate = (rawDate) => {
@@ -1514,7 +1922,7 @@ function PowerScreen({ user, onBack }) {
     const endMs = endOfDayDate(statsEndDate).getTime()
     if (startMs > endMs) return { error: 'Start date must be on or before end date.' }
 
-    const visibleIds = new Set(visibleMeters.map((m) => String(m._id)))
+    const visibleIds = new Set(metersForStats.map((m) => String(m._id)))
     const inRange = (tx) => {
       const t = Number(tx.date || 0)
       return t >= startMs && t <= endMs && visibleIds.has(String(tx.meterId))
@@ -1526,7 +1934,7 @@ function PowerScreen({ user, onBack }) {
     const loadUnits = loads.reduce((s, tx) => s + Number(tx.units || 0), 0)
 
     const intervals = []
-    for (const m of visibleMeters) {
+    for (const m of metersForStats) {
       const chain = transactions
         .filter((tx) => String(tx.meterId) === String(m._id) && visibleIds.has(String(tx.meterId)))
         .filter((tx) => tx.reading != null && Number.isFinite(Number(tx.reading)))
@@ -1568,7 +1976,7 @@ function PowerScreen({ user, onBack }) {
       monthlyProjection,
       sumDelta,
     }
-  }, [transactions, visibleMeters, statsStartDate, statsEndDate])
+  }, [transactions, metersForStats, statsStartDate, statsEndDate])
 
   const renderMeterColumn = (title, list) => (
     <View style={powerStyles.meterColumn}>
@@ -1579,8 +1987,8 @@ function PowerScreen({ user, onBack }) {
           key={meter._id}
           style={[powerStyles.meterColumnChip, selectedMeterId === meter._id ? powerStyles.meterChipActive : null]}
           onPress={() => setSelectedMeterId(meter._id)}
-          onLongPress={() => hideMeter(meter)}
-          delayLongPress={450}
+          onLongPress={isPowerAdmin ? () => hideMeter(meter) : undefined}
+          delayLongPress={isPowerAdmin ? 450 : undefined}
         >
           <Text
             style={[powerStyles.meterColumnChipText, selectedMeterId === meter._id ? powerStyles.meterChipTextActive : null]}
@@ -1621,18 +2029,21 @@ function PowerScreen({ user, onBack }) {
         <ScrollView
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.contentWrap, styles.formScrollBottom]}
+          contentContainerStyle={[
+            styles.contentWrap,
+            styles.formScrollBottom,
+            powerTab === 'record' ? powerStyles.recordContentWrap : null,
+          ]}
         >
           {powerTab === 'record' ? (
-            <View style={[styles.card, powerStyles.card]}>
-              <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Meters · tap to select · long-press to hide</Text>
+            <View style={[styles.card, powerStyles.card, powerStyles.recordCard]}>
               <View style={powerStyles.meterColumns}>
                 {renderMeterColumn('Power', powerMeters)}
                 {renderMeterColumn('Water', waterMeters)}
               </View>
-              {hiddenMeters.length > 0 ? (
-                <View style={{ marginTop: 10 }}>
-                  <Text style={[styles.itemMeta, powerStyles.itemMeta]}>Hidden — tap to restore</Text>
+              {isPowerAdmin && hiddenMeters.length > 0 ? (
+                <View style={{ marginTop: 6 }}>
+                  <Text style={[styles.itemMeta, powerStyles.itemMeta, powerStyles.recordMeta]}>Hidden — tap to restore</Text>
                   <View style={[styles.row, { marginTop: 6 }]}>
                     {hiddenMeters.map((m) => (
                       <TouchableOpacity key={m._id} style={powerStyles.restoreChip} onPress={() => restoreMeter(m._id)}>
@@ -1649,81 +2060,102 @@ function PowerScreen({ user, onBack }) {
 
           {powerTab === 'record' ? (
             <>
-              <View style={[styles.card, powerStyles.card]}>
-                <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Record utility load</Text>
-                <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
+              <View style={[styles.card, powerStyles.card, powerStyles.recordCard]}>
+                <Text style={[styles.sectionTitle, powerStyles.sectionTitle, powerStyles.recordSectionTitle]}>Record utility load</Text>
+                <Text style={[styles.itemMeta, powerStyles.itemMeta, powerStyles.recordMeta]}>
                   Selected: {meterLookup[selectedMeterId]?.name || '—'}
                 </Text>
-                <TextInput
-                  value={amount}
-                  onChangeText={setAmount}
-                  style={[styles.input, powerStyles.input]}
-                  placeholder="Amount paid (R) *"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numeric"
-                />
-                <TextInput
-                  value={units}
-                  onChangeText={setUnits}
-                  style={[styles.input, powerStyles.input]}
-                  placeholder="Units loaded *"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numeric"
-                />
-                <TextInput
-                  value={readingInput}
-                  onChangeText={setReadingInput}
-                  style={[styles.input, powerStyles.input]}
-                  placeholder="Current meter reading *"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numeric"
-                />
+                <View style={powerStyles.loadFormGrid}>
+                  <View style={powerStyles.loadFormRow}>
+                    <TextInput
+                      value={amount}
+                      onChangeText={setAmount}
+                      style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      placeholder="Amount (R) *"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                    <TextInput
+                      value={units}
+                      onChangeText={setUnits}
+                      style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      placeholder="Units *"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={powerStyles.loadFormRow}>
+                    <TextInput
+                      value={readingInput}
+                      onChangeText={setReadingInput}
+                      style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      placeholder="Reading *"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                    <TouchableOpacity
+                      style={[styles.input, powerStyles.input, powerStyles.dateTouch, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      onPress={() => setPowerPickerTarget('loadDate')}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose transaction date"
+                    >
+                      <Text style={[powerStyles.dateTouchLabel, powerStyles.recordDateTouchLabel]}>Date *</Text>
+                      <Text style={[powerStyles.dateTouchValue, powerStyles.recordDateTouchValue]}>{formatPowerDate(loadDate)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
                 <TouchableOpacity
-                  style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
-                  onPress={() => setPowerPickerTarget('loadDate')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose transaction date"
-                >
-                  <Text style={powerStyles.dateTouchLabel}>Transaction date *</Text>
-                  <Text style={powerStyles.dateTouchValue}>{formatPowerDate(loadDate)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.buttonPrimary, powerStyles.buttonPrimary, (savingLoad || !selectedMeterId) && styles.buttonDisabled]}
+                  style={[
+                    styles.buttonPrimary,
+                    powerStyles.buttonPrimary,
+                    powerStyles.recordPrimaryBtn,
+                    (savingLoad || !selectedMeterId) && styles.buttonDisabled,
+                  ]}
                   disabled={savingLoad || !selectedMeterId}
                   onPress={promptSaveLoad}
                 >
-                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>{savingLoad ? 'Saving…' : 'Save load'}</Text>
+                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText, powerStyles.recordPrimaryBtnText]}>
+                    {savingLoad ? 'Saving…' : 'Save load'}
+                  </Text>
                 </TouchableOpacity>
               </View>
 
-              <View style={[styles.card, powerStyles.card]}>
-                <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Reading snapshot</Text>
-                <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
-                  Log a meter reading (no purchase). Uses the selected meter above.
-                </Text>
-                <TextInput
-                  value={randomReading}
-                  onChangeText={setRandomReading}
-                  style={[styles.input, powerStyles.input]}
-                  placeholder="Reading *"
-                  placeholderTextColor="#64748b"
-                  keyboardType="numeric"
-                />
+              <View style={[styles.card, powerStyles.card, powerStyles.recordCard]}>
+                <Text style={[styles.sectionTitle, powerStyles.sectionTitle, powerStyles.recordSectionTitle]}>Reading snapshot</Text>
+                <View style={powerStyles.loadFormGrid}>
+                  <View style={powerStyles.loadFormRow}>
+                    <TextInput
+                      value={randomReading}
+                      onChangeText={setRandomReading}
+                      style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      placeholder="Reading *"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                    <TouchableOpacity
+                      style={[styles.input, powerStyles.input, powerStyles.dateTouch, powerStyles.recordInput, powerStyles.loadFormHalf]}
+                      onPress={() => setPowerPickerTarget('snapshotDate')}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose reading date"
+                    >
+                      <Text style={[powerStyles.dateTouchLabel, powerStyles.recordDateTouchLabel]}>Date *</Text>
+                      <Text style={[powerStyles.dateTouchValue, powerStyles.recordDateTouchValue]}>{formatPowerDate(snapshotDate)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
                 <TouchableOpacity
-                  style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
-                  onPress={() => setPowerPickerTarget('snapshotDate')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose reading date"
-                >
-                  <Text style={powerStyles.dateTouchLabel}>Reading date *</Text>
-                  <Text style={powerStyles.dateTouchValue}>{formatPowerDate(snapshotDate)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.buttonPrimary, powerStyles.buttonPrimary, (savingReading || !selectedMeterId) && styles.buttonDisabled]}
+                  style={[
+                    styles.buttonPrimary,
+                    powerStyles.buttonPrimary,
+                    powerStyles.recordPrimaryBtn,
+                    (savingReading || !selectedMeterId) && styles.buttonDisabled,
+                  ]}
                   disabled={savingReading || !selectedMeterId}
                   onPress={promptSaveReading}
                 >
-                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText]}>{savingReading ? 'Saving…' : 'Save reading'}</Text>
+                  <Text style={[styles.buttonText, powerStyles.buttonPrimaryText, powerStyles.recordPrimaryBtnText]}>
+                    {savingReading ? 'Saving…' : 'Save reading'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </>
@@ -1732,7 +2164,9 @@ function PowerScreen({ user, onBack }) {
           {powerTab === 'history' ? (
             <View style={[styles.card, powerStyles.card]}>
               <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Transaction history</Text>
-              <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>Long-press a row to edit or delete.</Text>
+              <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
+                Long-press a row to edit{isPowerAdmin ? ' or delete' : ''}.
+              </Text>
               {loading ? <ActivityIndicator size="small" color="#facc15" /> : null}
               {visibleTransactions.length === 0 ? (
                 <Text style={[styles.empty, powerStyles.empty]}>No transactions yet.</Text>
@@ -1770,26 +2204,42 @@ function PowerScreen({ user, onBack }) {
           ) : null}
 
           {powerTab === 'stats' ? (
-            <View style={[styles.card, powerStyles.card]}>
-              <Text style={[styles.sectionTitle, powerStyles.sectionTitle]}>Summary & usage</Text>
-              <Text style={[styles.itemMeta, powerStyles.itemMeta, { marginBottom: 8 }]}>
-                Filter by date range. Usage between consecutive readings is counted when the newer reading falls in range.
-              </Text>
+            <View style={[styles.card, powerStyles.card, powerStyles.recordCard]}>
+              <Text style={[styles.sectionTitle, powerStyles.sectionTitle, powerStyles.recordSectionTitle]}>Summary & usage</Text>
+              <View style={powerStyles.statsScopeRow}>
+                {[
+                  { id: 'both', label: 'Both' },
+                  { id: 'power', label: 'Power' },
+                  { id: 'water', label: 'Water' },
+                ].map(({ id, label }) => (
+                  <TouchableOpacity
+                    key={id}
+                    style={[powerStyles.statsScopeChip, statsMeterScope === id && powerStyles.statsScopeChipActive]}
+                    onPress={() => setStatsMeterScope(id)}
+                  >
+                    <Text
+                      style={[powerStyles.statsScopeChipText, statsMeterScope === id && powerStyles.statsScopeChipTextActive]}
+                    >
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               <TouchableOpacity
-                style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.dateTouch]}
                 onPress={() => setPowerPickerTarget('statsStart')}
                 accessibilityRole="button"
               >
-                <Text style={powerStyles.dateTouchLabel}>Range start *</Text>
-                <Text style={powerStyles.dateTouchValue}>{formatPowerDate(statsStartDate)}</Text>
+                <Text style={[powerStyles.dateTouchLabel, powerStyles.recordDateTouchLabel]}>Range start *</Text>
+                <Text style={[powerStyles.dateTouchValue, powerStyles.recordDateTouchValue]}>{formatPowerDate(statsStartDate)}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.input, powerStyles.input, powerStyles.dateTouch]}
+                style={[styles.input, powerStyles.input, powerStyles.recordInput, powerStyles.dateTouch]}
                 onPress={() => setPowerPickerTarget('statsEnd')}
                 accessibilityRole="button"
               >
-                <Text style={powerStyles.dateTouchLabel}>Range end *</Text>
-                <Text style={powerStyles.dateTouchValue}>{formatPowerDate(statsEndDate)}</Text>
+                <Text style={[powerStyles.dateTouchLabel, powerStyles.recordDateTouchLabel]}>Range end *</Text>
+                <Text style={[powerStyles.dateTouchValue, powerStyles.recordDateTouchValue]}>{formatPowerDate(statsEndDate)}</Text>
               </TouchableOpacity>
               {statsBundle?.error ? <Text style={[styles.error, powerStyles.error]}>{statsBundle.error}</Text> : null}
               {!statsBundle?.error && statsBundle ? (
@@ -1949,15 +2399,51 @@ function PowerScreen({ user, onBack }) {
 }
 
 function ShopScreen({ user, onBack, onUpdatedUrgent }) {
+  const shopAdmin = isAdmin(user)
   const [categories, setCategories] = useState([])
   const [items, setItems] = useState([])
   const [categoryName, setCategoryName] = useState('')
   const [selectedCategoryId, setSelectedCategoryId] = useState('')
   const [itemTitle, setItemTitle] = useState('')
+  const [quantityInput, setQuantityInput] = useState('')
   const [priority, setPriority] = useState('yellow')
-  const [reminderInput, setReminderInput] = useState('')
+  const [reminderDate, setReminderDate] = useState(null)
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false)
+  const [categoryPickTarget, setCategoryPickTarget] = useState(null)
+  const [shopReminderPicker, setShopReminderPicker] = useState(null)
+  const [shopReminderDraft, setShopReminderDraft] = useState(() => startOfDay(new Date()))
+  const [editItem, setEditItem] = useState(null)
+  const [savingEdit, setSavingEdit] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [shopTab, setShopTab] = useState('add')
+
+  const sortedCategories = useMemo(
+    () => [...categories].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })),
+    [categories],
+  )
+
+  const itemsByCategory = useMemo(() => {
+    const sorted = [...categories].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }),
+    )
+    const nameById = Object.fromEntries(categories.map((c) => [String(c._id), c.name]))
+    const buckets = new Map(sorted.map((c) => [c.name, []]))
+    for (const item of items) {
+      const label = nameById[String(item.categoryId)] || 'Other'
+      if (!buckets.has(label)) buckets.set(label, [])
+      buckets.get(label).push(item)
+    }
+    return Array.from(buckets.entries()).map(([name, list]) => ({
+      name,
+      items: [...list].sort((a, b) => {
+        const pri = (x) => (x.priority === 'red' ? 0 : x.priority === 'yellow' ? 1 : 2)
+        const d = pri(a) - pri(b)
+        if (d !== 0) return d
+        return String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' })
+      }),
+    }))
+  }, [categories, items])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -1966,28 +2452,65 @@ function ShopScreen({ user, onBack, onUpdatedUrgent }) {
       const [categoriesData, itemsData] = await Promise.all([apiFetch('/api/shop-categories'), apiFetch('/api/shop-items')])
       setCategories(categoriesData)
       setItems(itemsData)
-      if (!selectedCategoryId && categoriesData[0]) setSelectedCategoryId(categoriesData[0]._id)
       onUpdatedUrgent()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed loading shopping list')
     } finally {
       setLoading(false)
     }
-  }, [onUpdatedUrgent, selectedCategoryId])
+  }, [onUpdatedUrgent])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    if (sortedCategories.length === 0) return
+    if (!sortedCategories.some((c) => c._id === selectedCategoryId)) {
+      setSelectedCategoryId(sortedCategories[0]._id)
+    }
+  }, [sortedCategories, selectedCategoryId])
+
+  const openShopReminderPicker = (mode) => {
+    if (mode === 'add') {
+      setShopReminderDraft(reminderDate ?? startOfDay(new Date()))
+    } else if (editItem) {
+      setShopReminderDraft(editItem.reminderAt != null ? startOfDay(new Date(editItem.reminderAt)) : startOfDay(new Date()))
+    }
+    setShopReminderPicker(mode)
+  }
+
+  const confirmShopReminderPicker = () => {
+    const sd = startOfDay(shopReminderDraft)
+    if (shopReminderPicker === 'add') setReminderDate(sd)
+    else if (shopReminderPicker === 'edit' && editItem) setEditItem({ ...editItem, reminderAt: sd.getTime() })
+    setShopReminderPicker(null)
+  }
+
+  const clearShopReminderPicker = () => {
+    if (shopReminderPicker === 'add') setReminderDate(null)
+    else if (shopReminderPicker === 'edit' && editItem) setEditItem({ ...editItem, reminderAt: null })
+    setShopReminderPicker(null)
+  }
+
   const addCategory = async () => {
     if (!categoryName.trim()) return
-    await apiFetch('/api/shop-categories', { method: 'POST', body: JSON.stringify({ userId: user?._id, name: categoryName.trim() }) })
+    await apiFetch('/api/shop-categories', {
+      method: 'POST',
+      body: JSON.stringify({ userId: user?._id, name: categoryName.trim() }),
+    })
     setCategoryName('')
     await refresh()
   }
 
   const addItem = async () => {
     if (!itemTitle.trim() || !selectedCategoryId) return
+    let quantity = null
+    const qt = quantityInput.trim()
+    if (qt) {
+      const n = Number(qt)
+      if (Number.isFinite(n) && n >= 0) quantity = n
+    }
     await apiFetch('/api/shop-items', {
       method: 'POST',
       body: JSON.stringify({
@@ -1995,26 +2518,157 @@ function ShopScreen({ user, onBack, onUpdatedUrgent }) {
         userId: user?._id,
         categoryId: selectedCategoryId,
         priority,
-        reminderAt: reminderInput ? new Date(reminderInput).getTime() : null,
+        reminderAt: reminderDate ? startOfDay(reminderDate).getTime() : null,
+        quantity,
       }),
     })
     setItemTitle('')
-    setReminderInput('')
+    setQuantityInput('')
+    setReminderDate(null)
     setPriority('yellow')
     await refresh()
   }
 
-  const updateItem = async (itemId, patch) => {
-    await apiFetch(`/api/shop-items/${itemId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  const patchItem = async (itemId, patch) => {
+    await apiFetch(`/api/shop-items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...patch, userId: user?._id }),
+    })
     await refresh()
+  }
+
+  const deleteItem = async (itemId) => {
+    await apiFetch(`/api/shop-items/${itemId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ userId: user?._id }),
+    })
+    await refresh()
+  }
+
+  const confirmDeleteItem = (item) => {
+    Alert.alert('Remove item?', `Remove “${item.title}” from the list?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => void deleteItem(item._id) },
+    ])
+  }
+
+  const openEditItem = (item) => {
+    const q = item.quantity
+    setEditItem({
+      _id: item._id,
+      title: item.title || '',
+      categoryId: item.categoryId,
+      priority: item.priority || 'yellow',
+      reminderAt: item.reminderAt != null ? Number(item.reminderAt) : null,
+      quantityStr: q != null && q !== '' && Number.isFinite(Number(q)) ? String(q) : '',
+    })
+    setError('')
+  }
+
+  const saveEditItem = async () => {
+    if (!editItem || !editItem.title.trim() || !editItem.categoryId) return
+    setSavingEdit(true)
+    setError('')
+    try {
+      let quantity = null
+      const qt = (editItem.quantityStr ?? '').trim()
+      if (qt) {
+        const n = Number(qt)
+        if (Number.isFinite(n) && n >= 0) quantity = n
+      }
+      await patchItem(editItem._id, {
+        title: editItem.title.trim(),
+        categoryId: editItem.categoryId,
+        priority: editItem.priority,
+        reminderAt: editItem.reminderAt,
+        quantity,
+      })
+      setEditItem(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save item')
+    } finally {
+      setSavingEdit(false)
+    }
   }
 
   const categoriesLookup = Object.fromEntries(categories.map((category) => [category._id, category.name]))
   const highPriority = items.filter((item) => item.priority === 'red' && !item.purchased)
 
+  const selectedCatLabel =
+    sortedCategories.find((c) => c._id === selectedCategoryId)?.name || '— Choose category —'
+  const editCatLabel = editItem
+    ? sortedCategories.find((c) => c._id === editItem.categoryId)?.name || '— Category —'
+    : '—'
+
+  const renderShopItemRow = (item) => (
+    <View key={item._id} style={styles.itemRow}>
+      <View style={styles.shopItemHeader}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.itemText}>
+            {item.purchased ? '✓ ' : ''}
+            {item.title}
+          </Text>
+          <Text style={styles.itemMeta}>
+            {categoriesLookup[item.categoryId] || 'Unknown'} · {shopPriorityLabel(item.priority)}
+            {item.quantity != null && item.quantity !== '' && Number.isFinite(Number(item.quantity))
+              ? ` · ×${Number(item.quantity)}`
+              : ''}
+            {item.reminderAt ? ` · ${formatPowerDate(new Date(item.reminderAt))}` : ''}
+          </Text>
+        </View>
+        {shopAdmin ? (
+          <View style={styles.shopAdminActions}>
+            <TouchableOpacity
+              style={[styles.shopBoughtBtn, item.purchased && styles.shopBoughtBtnActive]}
+              onPress={() => void patchItem(item._id, { purchased: !item.purchased })}
+              accessibilityLabel={item.purchased ? 'Mark not bought' : 'Mark bought'}
+            >
+              <Text style={[styles.shopBoughtBtnText, item.purchased && styles.shopBoughtBtnTextActive]}>✓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.shopRemoveBtn}
+              onPress={() => confirmDeleteItem(item)}
+              accessibilityLabel="Remove item"
+            >
+              <Text style={styles.shopRemoveBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+      <View style={[styles.row, styles.shopPriorityRow]}>
+        {SHOP_PRIORITY_KEYS.map((p) => (
+          <TouchableOpacity
+            key={`${item._id}-${p}`}
+            style={[styles.shopPriorityPill, item.priority === p && styles.prioritySelected]}
+            onPress={() => void patchItem(item._id, { priority: p })}
+          >
+            <Text style={styles.shopPriorityPillText}>{shopPriorityLabel(p)}</Text>
+          </TouchableOpacity>
+        ))}
+        <TouchableOpacity style={styles.smallButton} onPress={() => openEditItem(item)}>
+          <Text style={styles.smallButtonText}>Edit</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  )
+
   return (
     <SafeAreaView style={styles.container}>
-      <TopBar title="SHOPList" onBack={onBack} onRefresh={refresh} />
+      <TopBar title="SMOKES & SWEETS" onBack={onBack} onRefresh={refresh} />
+      <View style={styles.shopTabBar}>
+        <TouchableOpacity
+          style={[styles.shopTab, shopTab === 'add' && styles.shopTabActive]}
+          onPress={() => setShopTab('add')}
+        >
+          <Text style={[styles.shopTabText, shopTab === 'add' && styles.shopTabTextActive]}>Add</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.shopTab, shopTab === 'list' && styles.shopTabActive]}
+          onPress={() => setShopTab('list')}
+        >
+          <Text style={[styles.shopTabText, shopTab === 'list' && styles.shopTabTextActive]}>Full list</Text>
+        </TouchableOpacity>
+      </View>
       <KeyboardAvoidingView
         style={styles.keyboardFlex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -2025,114 +2679,354 @@ function ShopScreen({ user, onBack, onUpdatedUrgent }) {
           keyboardDismissMode="on-drag"
           contentContainerStyle={[styles.contentWrap, styles.formScrollBottom]}
         >
-        {isAdmin(user) ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Add Category</Text>
-            <TextInput value={categoryName} onChangeText={setCategoryName} style={styles.input} placeholder="Category name" />
-            <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addCategory()}>
-              <Text style={styles.buttonText}>Add Category</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
+          {shopTab === 'add' ? (
+            <>
+              {shopAdmin ? (
+                <View style={styles.card}>
+                  <View style={styles.shopCategoryAddRow}>
+                    <TextInput
+                      value={categoryName}
+                      onChangeText={setCategoryName}
+                      style={[styles.input, styles.shopCategoryInput]}
+                      placeholder="Category name"
+                    />
+                    <TouchableOpacity style={styles.shopCategoryAddBtn} onPress={() => void addCategory()}>
+                      <Text style={styles.shopCategoryAddBtnText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Add Shopping Item</Text>
-          <TextInput value={itemTitle} onChangeText={setItemTitle} style={styles.input} placeholder="Item name" />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalWrap}>
-            {categories.map((category) => (
-              <TouchableOpacity
-                key={category._id}
-                style={[styles.chip, selectedCategoryId === category._id ? styles.chipActive : null]}
-                onPress={() => setSelectedCategoryId(category._id)}
-              >
-                <Text style={selectedCategoryId === category._id ? styles.chipTextActive : styles.chipText}>
-                  {category.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          <View style={styles.row}>
-            {['green', 'yellow', 'red'].map((p) => (
-              <TouchableOpacity
-                key={p}
-                style={[styles.priorityChip, styles[`priority_${p}`], priority === p ? styles.prioritySelected : null]}
-                onPress={() => setPriority(p)}
-              >
-                <Text style={styles.priorityText}>{p.toUpperCase()}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TextInput
-            value={reminderInput}
-            onChangeText={setReminderInput}
-            style={styles.input}
-            placeholder="Reminder date (YYYY-MM-DD HH:mm)"
-          />
-          <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addItem()}>
-            <Text style={styles.buttonText}>Add Item</Text>
-          </TouchableOpacity>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-        </View>
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Add item</Text>
+                <Text style={styles.fieldLabel}>Category</Text>
+                <TouchableOpacity
+                  style={[styles.dropdownField, styles.shopAddDropdownCompact]}
+                  onPress={() => {
+                    setCategoryPickTarget('add')
+                    setCategoryModalOpen(true)
+                  }}
+                  accessibilityRole="button"
+                >
+                  <View style={styles.dropdownFieldInner}>
+                    <Text
+                      style={
+                        selectedCategoryId
+                          ? [styles.dropdownFieldText, styles.shopAddDropdownText]
+                          : [styles.dropdownPlaceholder, styles.shopAddDropdownText]
+                      }
+                    >
+                      {selectedCatLabel}
+                    </Text>
+                    <Text style={[styles.dropdownChevron, styles.shopAddDropdownChevron]}>▼</Text>
+                  </View>
+                </TouchableOpacity>
+                <Text style={styles.fieldLabel}>Item</Text>
+                <TextInput value={itemTitle} onChangeText={setItemTitle} style={styles.input} placeholder="Item name" />
+                <Text style={styles.fieldLabel}>Quantity (optional)</Text>
+                <TextInput
+                  value={quantityInput}
+                  onChangeText={setQuantityInput}
+                  style={styles.input}
+                  placeholder="e.g. 2"
+                  keyboardType="numeric"
+                />
+                <View style={styles.row}>
+                  {SHOP_PRIORITY_KEYS.map((p) => (
+                    <TouchableOpacity
+                      key={p}
+                      style={[styles.priorityChip, styles[`priority_${p}`], priority === p ? styles.prioritySelected : null]}
+                      onPress={() => setPriority(p)}
+                    >
+                      <Text style={styles.priorityText}>{shopPriorityLabel(p)}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.fieldLabel, styles.shopReminderLabelCompact]}>Reminder</Text>
+                <View style={styles.shopReminderRowCompact}>
+                  <TouchableOpacity
+                    style={[styles.dropdownField, styles.shopAddDropdownCompact, styles.shopReminderTouchFlex]}
+                    onPress={() => openShopReminderPicker('add')}
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.dropdownFieldInner}>
+                      <Text
+                        style={
+                          reminderDate
+                            ? [styles.dropdownFieldText, styles.shopReminderInlineText]
+                            : [styles.dropdownPlaceholder, styles.shopReminderInlineText]
+                        }
+                        numberOfLines={1}
+                      >
+                        {reminderDate ? formatPowerDate(reminderDate) : 'None'}
+                      </Text>
+                      <Text style={[styles.dropdownChevron, styles.shopAddDropdownChevron]}>📅</Text>
+                    </View>
+                  </TouchableOpacity>
+                  {reminderDate ? (
+                    <TouchableOpacity
+                      style={styles.shopReminderClearX}
+                      onPress={() => setReminderDate(null)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear reminder"
+                      hitSlop={8}
+                    >
+                      <Text style={styles.shopReminderClearXText}>✕</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                <TouchableOpacity style={styles.buttonPrimary} onPress={() => void addItem()}>
+                  <Text style={styles.buttonText}>Add item</Text>
+                </TouchableOpacity>
+                {error ? <Text style={styles.error}>{error}</Text> : null}
+              </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Most Important (Red)</Text>
-          {highPriority.length === 0 ? <Text style={styles.empty}>No red-priority items.</Text> : null}
-          {highPriority.map((item) => (
-            <View key={item._id} style={styles.itemRow}>
-              <Text style={styles.itemText}>🔴 {item.title}</Text>
-              <Text style={styles.itemMeta}>
-                {categoriesLookup[item.categoryId] || 'Unknown category'} |{' '}
-                {item.reminderAt ? new Date(item.reminderAt).toLocaleString() : 'No reminder'}
-              </Text>
-            </View>
-          ))}
-        </View>
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Today</Text>
+                {highPriority.length === 0 ? <Text style={styles.empty}>Nothing for today.</Text> : null}
+                {highPriority.map((item) => (
+                  <View key={item._id} style={styles.itemRow}>
+                    <Text style={styles.itemText}>{item.title}</Text>
+                    <Text style={styles.itemMeta}>
+                      {categoriesLookup[item.categoryId] || 'Unknown'}
+                      {item.quantity != null && item.quantity !== '' && Number.isFinite(Number(item.quantity))
+                        ? ` · ×${Number(item.quantity)}`
+                        : ''}
+                      {item.reminderAt ? ` · ${formatPowerDate(new Date(item.reminderAt))}` : ''}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>All Items</Text>
-          {loading ? <ActivityIndicator size="small" color="#4f46e5" /> : null}
-          {items.map((item) => (
-            <View key={item._id} style={styles.itemRow}>
-              <Text style={styles.itemText}>
-                {item.purchased ? '✅' : '⬜'} {item.title}
-              </Text>
-              <Text style={styles.itemMeta}>
-                {categoriesLookup[item.categoryId] || 'Unknown'} | Priority: {item.priority}
-              </Text>
-              <View style={styles.row}>
+          {shopTab === 'list' ? (
+            <View style={styles.card}>
+              <View style={styles.shopListHeaderRow}>
+                <Text style={[styles.sectionTitle, styles.shopListHeaderTitle]}>Shopping list by category</Text>
                 <TouchableOpacity
-                  style={styles.smallButton}
-                  onPress={() => void updateItem(item._id, { purchased: !item.purchased })}
+                  style={styles.shopListRefreshBtn}
+                  onPress={() => void refresh()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh shopping list"
                 >
-                  <Text style={styles.smallButtonText}>{item.purchased ? 'Undo' : 'Done'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.smallButton} onPress={() => void updateItem(item._id, { priority: 'red' })}>
-                  <Text style={styles.smallButtonText}>R</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.smallButton}
-                  onPress={() => void updateItem(item._id, { priority: 'yellow' })}
-                >
-                  <Text style={styles.smallButtonText}>Y</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.smallButton}
-                  onPress={() => void updateItem(item._id, { priority: 'green' })}
-                >
-                  <Text style={styles.smallButtonText}>G</Text>
+                  <Text style={styles.shopListRefreshBtnText}>Refresh</Text>
                 </TouchableOpacity>
               </View>
+              {sortedCategories.length === 0 ? <Text style={styles.empty}>Add a category first.</Text> : null}
+              {loading ? <ActivityIndicator size="small" color={CHECKERS.teal} /> : null}
+              {items.length === 0 && sortedCategories.length > 0 ? (
+                <Text style={styles.empty}>No items yet.</Text>
+              ) : null}
+              {itemsByCategory.map((group, idx) => (
+                <View
+                  key={group.name}
+                  style={[styles.shopCategorySection, idx === 0 && styles.shopCategorySectionFirst]}
+                >
+                  <Text style={styles.shopCategoryHeading}>{group.name}</Text>
+                  {group.items.length === 0 ? (
+                    <Text style={styles.empty}>No items in this category.</Text>
+                  ) : (
+                    group.items.map((item) => renderShopItemRow(item))
+                  )}
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal visible={categoryModalOpen} animationType="fade" transparent>
+        <TouchableOpacity
+          style={styles.modalBackdropCentered}
+          activeOpacity={1}
+          onPress={() => {
+            setCategoryModalOpen(false)
+            setCategoryPickTarget(null)
+          }}
+        >
+          <View style={[styles.dialogCard, { maxWidth: 360, width: '100%' }]} onStartShouldSetResponder={() => true}>
+            <View style={styles.shopCategoryModalHeader}>
+              <Text style={[styles.modalTitle, styles.shopCategoryModalTitle]}>Category</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setCategoryModalOpen(false)
+                  setCategoryPickTarget(null)
+                }}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Text style={styles.shopCategoryModalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            {sortedCategories.map((category) => (
+              <TouchableOpacity
+                key={category._id}
+                style={styles.modalRow}
+                onPress={() => {
+                  if (categoryPickTarget === 'edit' && editItem) setEditItem({ ...editItem, categoryId: category._id })
+                  else setSelectedCategoryId(category._id)
+                  setCategoryModalOpen(false)
+                  setCategoryPickTarget(null)
+                }}
+              >
+                <Text style={styles.itemText}>{category.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={Platform.OS === 'ios' && shopReminderPicker !== null} animationType="slide" transparent>
+        <View style={[styles.modalBackdropCentered, styles.modalKeyboardAvoid]}>
+          <View style={[styles.dialogCard, { width: '100%', maxWidth: 400 }]}>
+            <View style={styles.datePickerToolbar}>
+              <TouchableOpacity onPress={() => setShopReminderPicker(null)} hitSlop={12}>
+                <Text style={styles.datePickerToolbarBtn}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => clearShopReminderPicker()} hitSlop={12}>
+                <Text style={styles.datePickerToolbarBtn}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => confirmShopReminderPicker()} hitSlop={12}>
+                <Text style={styles.datePickerToolbarBtn}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={shopReminderDraft}
+              mode="date"
+              display="spinner"
+              onChange={(_, date) => {
+                if (date) setShopReminderDraft(startOfDay(date))
+              }}
+              themeVariant="light"
+            />
+          </View>
+        </View>
+      </Modal>
+      {Platform.OS === 'android' && shopReminderPicker !== null ? (
+        <DateTimePicker
+          value={shopReminderDraft}
+          mode="date"
+          display="default"
+          onChange={(event, date) => {
+            if (event?.type === 'dismissed') {
+              setShopReminderPicker(null)
+              return
+            }
+            if (date) {
+              const sd = startOfDay(date)
+              if (shopReminderPicker === 'add') setReminderDate(sd)
+              else if (shopReminderPicker === 'edit' && editItem) setEditItem({ ...editItem, reminderAt: sd.getTime() })
+              setShopReminderPicker(null)
+            }
+          }}
+        />
+      ) : null}
+
+      <Modal visible={editItem !== null} animationType="fade" transparent>
+        <KeyboardAvoidingView
+          style={[styles.modalBackdropCentered, styles.modalKeyboardAvoid]}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 48 : 0}
+        >
+          <View style={[styles.dialogCard, { width: '100%', maxWidth: 420 }]}>
+            <Text style={styles.modalTitle}>Edit item</Text>
+            <Text style={styles.fieldLabel}>Category</Text>
+            <TouchableOpacity
+              style={styles.dropdownField}
+              onPress={() => {
+                setCategoryPickTarget('edit')
+                setCategoryModalOpen(true)
+              }}
+              accessibilityRole="button"
+            >
+              <View style={styles.dropdownFieldInner}>
+                <Text style={styles.dropdownFieldText}>{editCatLabel}</Text>
+                <Text style={styles.dropdownChevron}>▼</Text>
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.fieldLabel}>Item</Text>
+            <TextInput
+              value={editItem?.title ?? ''}
+              onChangeText={(t) => setEditItem((prev) => (prev ? { ...prev, title: t } : null))}
+              style={styles.input}
+              placeholder="Item name"
+            />
+            <Text style={styles.fieldLabel}>Quantity (optional)</Text>
+            <TextInput
+              value={editItem?.quantityStr ?? ''}
+              onChangeText={(t) => setEditItem((prev) => (prev ? { ...prev, quantityStr: t } : null))}
+              style={styles.input}
+              placeholder="e.g. 2"
+              keyboardType="numeric"
+            />
+            <View style={styles.row}>
+              {SHOP_PRIORITY_KEYS.map((p) => (
+                <TouchableOpacity
+                  key={`edit-${p}`}
+                  style={[styles.priorityChip, styles[`priority_${p}`], editItem?.priority === p ? styles.prioritySelected : null]}
+                  onPress={() => setEditItem((prev) => (prev ? { ...prev, priority: p } : null))}
+                >
+                  <Text style={styles.priorityText}>{shopPriorityLabel(p)}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.fieldLabel, styles.shopReminderLabelCompact]}>Reminder</Text>
+            <View style={styles.shopReminderRowCompact}>
+              <TouchableOpacity
+                style={[styles.dropdownField, styles.shopAddDropdownCompact, styles.shopReminderTouchFlex]}
+                onPress={() => openShopReminderPicker('edit')}
+                accessibilityRole="button"
+              >
+                <View style={styles.dropdownFieldInner}>
+                  <Text
+                    style={
+                      editItem?.reminderAt
+                        ? [styles.dropdownFieldText, styles.shopReminderInlineText]
+                        : [styles.dropdownPlaceholder, styles.shopReminderInlineText]
+                    }
+                    numberOfLines={1}
+                  >
+                    {editItem?.reminderAt ? formatPowerDate(new Date(editItem.reminderAt)) : 'None'}
+                  </Text>
+                  <Text style={[styles.dropdownChevron, styles.shopAddDropdownChevron]}>📅</Text>
+                </View>
+              </TouchableOpacity>
+              {editItem?.reminderAt ? (
+                <TouchableOpacity
+                  style={styles.shopReminderClearX}
+                  onPress={() => setEditItem((prev) => (prev ? { ...prev, reminderAt: null } : null))}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear reminder"
+                  hitSlop={8}
+                >
+                  <Text style={styles.shopReminderClearXText}>✕</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <View style={styles.row}>
+              <TouchableOpacity style={styles.buttonSecondary} onPress={() => setEditItem(null)}>
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.buttonPrimary, savingEdit && styles.buttonDisabled]}
+                disabled={savingEdit}
+                onPress={() => void saveEditItem()}
+              >
+                <Text style={styles.buttonText}>{savingEdit ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   )
 }
 
 function ChoresScreen({ user, onBack }) {
   const [users, setUsers] = useState([])
+  const [userNameById, setUserNameById] = useState({})
   const [chores, setChores] = useState([])
   const [title, setTitle] = useState('')
   const [assigneeId, setAssigneeId] = useState('')
@@ -2144,10 +3038,15 @@ function ChoresScreen({ user, onBack }) {
     setLoading(true)
     setError('')
     try {
-      const [usersData, choresData] = await Promise.all([apiFetch('/api/users'), apiFetch('/api/chores')])
+      const uid = user?._id ? `?userId=${encodeURIComponent(user._id)}` : ''
+      const [usersData, choresData] = await Promise.all([
+        apiFetch('/api/users'),
+        apiFetch(`/api/chores${uid}`),
+      ])
       const onlyChildren = usersData.filter((candidate) => ['Danelle', 'Suzelle'].includes(candidate.name))
       setUsers(onlyChildren)
-      setChores(isAdmin(user) ? choresData : choresData.filter((chore) => chore.assignedToUserId === user?._id))
+      setUserNameById(Object.fromEntries(usersData.map((u) => [u._id, u.name])))
+      setChores(choresData)
       if (!assigneeId && onlyChildren[0]) setAssigneeId(onlyChildren[0]._id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed loading chores')
@@ -2176,6 +3075,9 @@ function ChoresScreen({ user, onBack }) {
   }
 
   const toggleCompleted = async (chore) => {
+    const can =
+      isAdmin(user) || chore.assignedToUserId === user?._id
+    if (!can) return
     await apiFetch(`/api/chores/${chore._id}`, {
       method: 'PATCH',
       body: JSON.stringify({ userId: user?._id, completed: !chore.completed }),
@@ -2183,12 +3085,25 @@ function ChoresScreen({ user, onBack }) {
     await refresh()
   }
 
-  const userLookup = Object.fromEntries(users.map((u) => [u._id, u.name]))
+  const toggleAdminVerified = async (chore) => {
+    if (!isAdmin(user)) return
+    await apiFetch(`/api/chores/${chore._id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ userId: user?._id, adminVerified: !chore.adminVerified }),
+    })
+    await refresh()
+  }
+
   const choresByDay = Object.fromEntries(allDays.map((day) => [day, chores.filter((chore) => chore.assignedDays?.includes(day))]))
 
   return (
-    <SafeAreaView style={styles.container}>
-      <TopBar title="D & Z Chores" onBack={onBack} onRefresh={refresh} />
+    <SafeAreaView style={[styles.container, sweepSussieStyles.screen]}>
+      <TopBar title="Sweep Sussie" variant="chores" onBack={onBack} onRefresh={refresh} />
+      <View style={sweepSussieStyles.screenStripeBar}>
+        {SA_FLAG_STRIPES.map((color, i) => (
+          <View key={`chores-stripe-${i}`} style={[sweepSussieStyles.screenStripeSeg, { backgroundColor: color }]} />
+        ))}
+      </View>
       <KeyboardAvoidingView
         style={styles.keyboardFlex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -2200,17 +3115,21 @@ function ChoresScreen({ user, onBack }) {
           contentContainerStyle={[styles.contentWrap, styles.formScrollBottom]}
         >
         {isAdmin(user) ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Add Chore</Text>
+          <View style={[styles.card, sweepSussieStyles.card]}>
+            <Text style={[styles.sectionTitle, sweepSussieStyles.sectionTitle]}>Add Chore</Text>
             <TextInput value={title} onChangeText={setTitle} style={styles.input} placeholder="Chore title" />
             <View style={styles.row}>
               {users.map((candidate) => (
                 <TouchableOpacity
                   key={candidate._id}
-                  style={[styles.chip, assigneeId === candidate._id ? styles.chipActive : null]}
+                  style={[styles.chip, assigneeId === candidate._id ? sweepSussieStyles.chipSelected : null]}
                   onPress={() => setAssigneeId(candidate._id)}
                 >
-                  <Text style={assigneeId === candidate._id ? styles.chipTextActive : styles.chipText}>{candidate.name}</Text>
+                  <Text
+                    style={[styles.chipText, assigneeId === candidate._id ? sweepSussieStyles.chipTextSelected : null]}
+                  >
+                    {candidate.name}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -2218,10 +3137,12 @@ function ChoresScreen({ user, onBack }) {
               {allDays.map((day) => (
                 <TouchableOpacity
                   key={day}
-                  style={[styles.chip, selectedDays.includes(day) ? styles.chipActive : null]}
+                  style={[styles.chip, selectedDays.includes(day) ? sweepSussieStyles.chipSelected : null]}
                   onPress={() => toggleDay(day)}
                 >
-                  <Text style={selectedDays.includes(day) ? styles.chipTextActive : styles.chipText}>{day}</Text>
+                  <Text style={[styles.chipText, selectedDays.includes(day) ? sweepSussieStyles.chipTextSelected : null]}>
+                    {day}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -2237,21 +3158,57 @@ function ChoresScreen({ user, onBack }) {
           </View>
         ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Weekly Calendar</Text>
-          {loading ? <ActivityIndicator size="small" color="#4f46e5" /> : null}
+        <View style={[styles.card, sweepSussieStyles.card]}>
+          <Text style={[styles.sectionTitle, sweepSussieStyles.sectionTitle]}>Weekly Calendar</Text>
+          {loading ? <ActivityIndicator size="small" color={SA.blue} /> : null}
           {allDays.map((day) => (
-            <View key={day} style={styles.daySection}>
-              <Text style={styles.dayTitle}>{day}</Text>
+            <View key={day} style={[styles.daySection, sweepSussieStyles.daySection]}>
+              <Text style={[styles.dayTitle, sweepSussieStyles.dayTitle]}>{day}</Text>
               {choresByDay[day]?.length === 0 ? <Text style={styles.empty}>No chores.</Text> : null}
-              {choresByDay[day]?.map((chore) => (
-                <TouchableOpacity key={`${day}-${chore._id}`} style={styles.itemRow} onPress={() => void toggleCompleted(chore)}>
-                  <Text style={styles.itemText}>
-                    {chore.completed ? '✅' : '⬜'} {chore.title}
-                  </Text>
-                  <Text style={styles.itemMeta}>{userLookup[chore.assignedToUserId] || 'Unknown'}</Text>
-                </TouchableOpacity>
-              ))}
+              {choresByDay[day]?.map((chore) => {
+                const assigneeName = userNameById[chore.assignedToUserId] || 'Unknown'
+                const canToggleDone = isAdmin(user) || chore.assignedToUserId === user?._id
+                return (
+                  <View key={`${day}-${chore._id}`} style={styles.choreCalendarRow}>
+                    <TouchableOpacity
+                      style={styles.choreCheckHit}
+                      disabled={!canToggleDone}
+                      onPress={() => void toggleCompleted(chore)}
+                      accessibilityLabel={chore.completed ? 'Mark chore not done' : 'Mark chore done'}
+                    >
+                      <Text style={styles.choreCheckGlyph}>{chore.completed ? '✅' : '⬜'}</Text>
+                    </TouchableOpacity>
+                    {isAdmin(user) ? (
+                      <TouchableOpacity
+                        style={styles.choreCheckHit}
+                        onPress={() => void toggleAdminVerified(chore)}
+                        accessibilityLabel={
+                          chore.adminVerified ? 'Clear admin verification' : 'Admin verify chore'
+                        }
+                      >
+                        <Text style={styles.choreCheckGlyph}>
+                          {chore.adminVerified ? '🛡️' : '⬜'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : chore.adminVerified ? (
+                      <Text style={styles.choreAdminBadge} accessibilityLabel="Verified by admin">
+                        🛡️
+                      </Text>
+                    ) : (
+                      <View style={styles.choreCheckHit} />
+                    )}
+                    <View style={styles.choreCalendarTextCol}>
+                      <Text style={styles.itemText}>{chore.title}</Text>
+                      <Text style={styles.itemMeta}>
+                        {assigneeName}
+                        {isAdmin(user)
+                          ? ` · Done ${chore.completed ? 'yes' : 'no'} · Sign-off ${chore.adminVerified ? 'yes' : 'no'}`
+                          : ''}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })}
             </View>
           ))}
         </View>
@@ -2264,6 +3221,29 @@ function ChoresScreen({ user, onBack }) {
 /** Pawn Shit — brown & gold from logo (pawn, coin, silhouette) */
 const pawnStyles = StyleSheet.create({
   screen: { backgroundColor: '#2c1810' },
+  dashboardTile: {
+    borderWidth: 2,
+    borderColor: '#c9954a',
+    backgroundColor: '#fffaf3',
+  },
+  dashboardIconRing: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 3,
+    borderColor: '#ffb833',
+    backgroundColor: '#fff5e6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  dashboardTileImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+  },
+  dashboardTileLabel: { color: '#4e110a', fontWeight: '800' },
   topBar: {
     backgroundColor: '#4e110a',
     borderBottomColor: '#ffb833',
@@ -2466,6 +3446,7 @@ const pawnStyles = StyleSheet.create({
 const powerStyles = StyleSheet.create({
   screen: { backgroundColor: '#0b3b75' },
   dashboardTile: {
+    borderWidth: 2,
     borderColor: '#1d4ed8',
     backgroundColor: '#eff6ff',
   },
@@ -2524,6 +3505,45 @@ const powerStyles = StyleSheet.create({
   },
   dateTouchLabel: { color: '#64748b', fontSize: 13, fontWeight: '600' },
   dateTouchValue: { color: '#0b3b75', fontWeight: '800', fontSize: 15 },
+  loadFormGrid: { width: '100%' },
+  loadFormRow: { flexDirection: 'row', gap: 6, marginBottom: 5 },
+  loadFormHalf: { flex: 1, minWidth: 0, marginBottom: 0 },
+  recordContentWrap: { gap: 8, paddingTop: 6 },
+  recordCard: { padding: 8 },
+  recordSectionTitle: { fontSize: 14, marginBottom: 4 },
+  recordMeta: { fontSize: 11, marginBottom: 4 },
+  recordInput: {
+    paddingVertical: 6,
+    paddingHorizontal: 9,
+    fontSize: 14,
+    minHeight: 36,
+  },
+  recordDateTouchLabel: { fontSize: 11 },
+  recordDateTouchValue: { fontSize: 13 },
+  recordPrimaryBtn: { paddingVertical: 8, borderRadius: 9 },
+  recordPrimaryBtnText: { fontSize: 14 },
+  statsScopeRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 6,
+  },
+  statsScopeChip: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+  },
+  statsScopeChipActive: {
+    backgroundColor: '#facc15',
+    borderColor: '#0b3b75',
+    borderWidth: 2,
+  },
+  statsScopeChipText: { color: '#0b3b75', fontWeight: '700', fontSize: 12 },
+  statsScopeChipTextActive: { color: '#0b3b75', fontWeight: '800' },
   datePickerToolbarPower: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2597,19 +3617,19 @@ const powerStyles = StyleSheet.create({
   meterColumnTitle: {
     color: '#0b3b75',
     fontWeight: '800',
-    fontSize: 13,
-    marginBottom: 8,
+    fontSize: 11,
+    marginBottom: 4,
   },
   meterColumnChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#1d4ed8',
     backgroundColor: '#ffffff',
-    marginBottom: 8,
+    marginBottom: 5,
   },
-  meterColumnChipText: { color: '#0b3b75', fontWeight: '700', fontSize: 13 },
+  meterColumnChipText: { color: '#0b3b75', fontWeight: '700', fontSize: 12 },
   restoreChip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -2629,42 +3649,121 @@ const powerStyles = StyleSheet.create({
 })
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
+  container: { flex: 1, backgroundColor: CHECKERS.bg },
   keyboardFlex: { flex: 1 },
-  loginScrollContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 120, gap: 12 },
+  loginScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    paddingBottom: 48,
+  },
+  loginHeroImage: {
+    width: '100%',
+    maxWidth: 400,
+    height: 220,
+    borderRadius: 12,
+    marginBottom: 28,
+    alignSelf: 'center',
+    backgroundColor: '#e8ecec',
+  },
+  loginFormBlock: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  loginPrimaryBtn: {
+    backgroundColor: CHECKERS.teal,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  loginErrorCenter: { textAlign: 'center' },
   formScrollBottom: { paddingBottom: 120, flexGrow: 1 },
   modalKeyboardAvoid: { flex: 1, justifyContent: 'center', width: '100%' },
   contentWrap: { padding: 16, gap: 12, paddingBottom: 40 },
   marginTop8: { marginTop: 8 },
   card: {
-    backgroundColor: '#ffffff',
+    backgroundColor: CHECKERS.card,
     borderRadius: 12,
-    borderColor: '#e2e8f0',
+    borderColor: '#dce8e8',
     borderWidth: 1,
     padding: 12,
   },
-  title: { fontSize: 24, fontWeight: '800', color: '#111827' },
-  subtitle: { fontSize: 14, color: '#475569', marginTop: 4 },
-  meta: { fontSize: 12, color: '#64748b', marginTop: 8 },
+  dashboardTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    width: '100%',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    zIndex: 10,
+    elevation: 8,
+    backgroundColor: CHECKERS.bg,
+  },
+  dashboardLogoutBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  dashboardLogoutPressed: { opacity: 0.75 },
+  dashboardLogoutText: {
+    color: CHECKERS.tealDark,
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  dashboardUrgentTitle: {
+    color: DASH_SOFT_RED.title,
+  },
+  dashboardUrgentBody: {
+    color: DASH_SOFT_RED.body,
+  },
+  dashboardUrgentMeta: {
+    color: DASH_SOFT_RED.meta,
+  },
+  dashboardHeaderCard: {
+    alignItems: 'center',
+  },
+  dashboardTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: CHECKERS.text,
+    textAlign: 'center',
+    width: '100%',
+  },
+  dashboardSubtitle: {
+    fontSize: 14,
+    color: CHECKERS.textMuted,
+    marginTop: 4,
+    textAlign: 'center',
+    width: '100%',
+  },
+  title: { fontSize: 24, fontWeight: '800', color: CHECKERS.text },
+  subtitle: { fontSize: 14, color: CHECKERS.textMuted, marginTop: 4 },
+  meta: { fontSize: 12, color: CHECKERS.textMuted, marginTop: 8 },
   topBar: {
     height: 56,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    backgroundColor: '#ffffff',
+    borderBottomWidth: 2,
+    borderBottomColor: CHECKERS.tealDark,
+    backgroundColor: CHECKERS.teal,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
   },
-  topTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  topTitle: { fontSize: 16, fontWeight: '700', color: '#ffffff' },
   topButton: { paddingHorizontal: 8, paddingVertical: 6 },
-  topButtonText: { color: '#4f46e5', fontWeight: '700' },
+  topButtonText: { color: CHECKERS.lime, fontWeight: '700' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   tile: {
     width: '48%',
     borderWidth: 1,
-    borderColor: '#dbe2ea',
-    backgroundColor: '#ffffff',
+    borderColor: '#b8d5d4',
+    backgroundColor: CHECKERS.card,
     borderRadius: 12,
     paddingVertical: 18,
     alignItems: 'center',
@@ -2672,22 +3771,23 @@ const styles = StyleSheet.create({
   },
   tileIcon: { fontSize: 28, marginBottom: 8 },
   tileImage: { width: 44, height: 44, borderRadius: 10, marginBottom: 8 },
-  tileLabel: { fontWeight: '700', color: '#111827', textAlign: 'center' },
+  tileLabel: { fontWeight: '700', color: CHECKERS.text, textAlign: 'center' },
   input: {
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#b8d5d4',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: '#ffffff',
     marginBottom: 8,
+    color: CHECKERS.text,
   },
   row: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   horizontalWrap: { marginVertical: 6 },
   buttonPrimary: {
     flex: 1,
     minWidth: 120,
-    backgroundColor: '#4f46e5',
+    backgroundColor: CHECKERS.teal,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: 'center',
@@ -2695,13 +3795,13 @@ const styles = StyleSheet.create({
   buttonSecondary: {
     flex: 1,
     minWidth: 120,
-    backgroundColor: '#0f172a',
+    backgroundColor: CHECKERS.tealDark,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: 'center',
   },
   buttonText: { color: '#ffffff', fontWeight: '700' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 8 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: CHECKERS.teal, marginBottom: 8 },
   sectionTitleNoMb: { marginBottom: 0 },
   pawnTicketHeaderRow: {
     flexDirection: 'row',
@@ -2741,9 +3841,26 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     paddingVertical: 8,
   },
-  itemText: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  itemMeta: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  empty: { color: '#64748b', fontSize: 13 },
+  choreCalendarRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderTopColor: '#e2e8f0',
+    borderTopWidth: 1,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  choreCheckHit: {
+    width: 36,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choreCheckGlyph: { fontSize: 18 },
+  choreAdminBadge: { fontSize: 16, width: 36, textAlign: 'center', paddingTop: 2 },
+  choreCalendarTextCol: { flex: 1, minWidth: 0 },
+  itemText: { fontSize: 15, fontWeight: '600', color: CHECKERS.text },
+  itemMeta: { fontSize: 12, color: CHECKERS.textMuted, marginTop: 2 },
+  empty: { color: CHECKERS.textMuted, fontSize: 13 },
   error: { color: '#b91c1c', marginTop: 8 },
   chip: {
     paddingHorizontal: 12,
@@ -2753,9 +3870,9 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
     backgroundColor: '#ffffff',
   },
-  chipActive: { backgroundColor: '#ede9fe', borderColor: '#7c3aed' },
-  chipText: { color: '#334155', fontWeight: '600' },
-  chipTextActive: { color: '#5b21b6', fontWeight: '700' },
+  chipActive: { backgroundColor: CHECKERS.limeMuted, borderColor: CHECKERS.lime },
+  chipText: { color: CHECKERS.text, fontWeight: '600' },
+  chipTextActive: { color: CHECKERS.tealDark, fontWeight: '700' },
   priorityChip: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -2779,7 +3896,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#4f46e5',
+    backgroundColor: CHECKERS.teal,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2792,20 +3909,20 @@ const styles = StyleSheet.create({
   fieldLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#475569',
+    color: CHECKERS.teal,
     marginBottom: 4,
   },
   dropdownField: {
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#b8d5d4',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#ffffff',
     marginBottom: 8,
   },
   dropdownFieldInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  dropdownFieldText: { fontSize: 16, color: '#111827', flex: 1 },
+  dropdownFieldText: { fontSize: 16, color: CHECKERS.text, flex: 1 },
   dropdownPlaceholder: { fontSize: 16, color: '#94a3b8', flex: 1 },
   dropdownChevron: { fontSize: 12, color: '#64748b' },
   modalBackdropCentered: {
@@ -2839,7 +3956,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
-  datePickerToolbarBtn: { color: '#4f46e5', fontWeight: '700', fontSize: 16 },
+  datePickerToolbarBtn: { color: CHECKERS.teal, fontWeight: '700', fontSize: 16 },
   shopPickerToolbar: { paddingHorizontal: 12 },
   shopPickerToolbarSpacer: { width: 64 },
   modalBackdrop: {
@@ -2878,5 +3995,201 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingBottom: 8,
   },
-  dayTitle: { fontSize: 14, fontWeight: '800', color: '#111827', paddingTop: 8 },
+  dayTitle: { fontSize: 14, fontWeight: '800', color: CHECKERS.teal, paddingTop: 8 },
+  shopTabBar: {
+    flexDirection: 'row',
+    backgroundColor: CHECKERS.tealDark,
+    marginHorizontal: 12,
+    marginTop: 4,
+    borderRadius: 12,
+    padding: 4,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: CHECKERS.lime,
+  },
+  shopTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  shopTabActive: { backgroundColor: CHECKERS.lime },
+  shopTabText: { color: '#dbeafe', fontWeight: '700', fontSize: 12 },
+  shopTabTextActive: { color: CHECKERS.tealDark },
+  shopCategoryAddRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  shopCategoryInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  shopCategoryAddBtn: {
+    backgroundColor: CHECKERS.teal,
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shopCategoryAddBtnText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  shopCategorySection: {
+    marginTop: 12,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  shopCategorySectionFirst: {
+    marginTop: 0,
+    paddingTop: 0,
+    borderTopWidth: 0,
+  },
+  shopListHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 4,
+  },
+  shopListHeaderTitle: { flex: 1, marginBottom: 0 },
+  shopListRefreshBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: CHECKERS.teal,
+    backgroundColor: '#ffffff',
+  },
+  shopListRefreshBtnText: {
+    color: CHECKERS.tealDark,
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  shopCategoryModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 12,
+  },
+  shopCategoryModalTitle: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  shopCategoryModalCloseText: {
+    color: CHECKERS.teal,
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  shopAddDropdownCompact: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minHeight: 36,
+    marginBottom: 8,
+  },
+  shopAddDropdownText: {
+    fontSize: 14,
+  },
+  shopAddDropdownChevron: {
+    fontSize: 10,
+  },
+  shopReminderLabelCompact: {
+    fontSize: 12,
+    marginBottom: 4,
+    marginTop: 2,
+  },
+  shopReminderRowCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  shopReminderTouchFlex: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  shopReminderInlineText: {
+    fontSize: 13,
+  },
+  shopReminderClearX: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  shopReminderClearXText: {
+    fontSize: 15,
+    color: '#64748b',
+    fontWeight: '800',
+  },
+  shopCategoryHeading: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: CHECKERS.teal,
+    marginBottom: 6,
+  },
+  shopPriorityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+    alignItems: 'center',
+  },
+  shopPriorityPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  shopPriorityPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: CHECKERS.text,
+  },
+  shopItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  shopAdminActions: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  shopBoughtBtn: {
+    borderWidth: 2,
+    borderColor: CHECKERS.lime,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minWidth: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shopBoughtBtnActive: {
+    backgroundColor: CHECKERS.limeMuted,
+    borderColor: CHECKERS.lime,
+  },
+  shopBoughtBtnText: { fontSize: 18, fontWeight: '900', color: CHECKERS.teal },
+  shopBoughtBtnTextActive: { color: '#166534' },
+  shopRemoveBtn: {
+    borderWidth: 2,
+    borderColor: '#ef4444',
+    backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minWidth: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shopRemoveBtnText: { fontSize: 18, fontWeight: '900', color: '#b91c1c' },
 })

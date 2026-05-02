@@ -10,7 +10,12 @@
     "start": "expo start",
     "render:start": "node api/index.js",
     "api:start": "node api/index.js",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "prebuild:android": "expo prebuild --platform android --clean",
+    "android:apk": "cd android && ./gradlew assembleRelease",
+    "android:apk-debug": "cd android && ./gradlew assembleDebug",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -24,5 +29,6 @@
   },
   "devDependencies": {
     "prettier": "^3.8.1"
-  }
+  },
+  "version": "1.0.0"
 }

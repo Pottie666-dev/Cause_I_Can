@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "Ridgeway-Mansion",
+    "name": "Ridgeway Mansion",
     "slug": "ridgeway-mansion",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./public/expo-icon.png",
+    "icon": "./public/ridgewayIcon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "resizeMode": "contain",
@@ -17,9 +17,11 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.ridgeway.mansion",
+      "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "foregroundImage": "./public/expo-icon.png",
+        "foregroundImage": "./public/ridgewayIcon.png",
         "backgroundColor": "#ffffff"
       }
     },
